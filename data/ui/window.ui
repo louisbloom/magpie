@@ -16,7 +16,7 @@
       <object class="AdwOverlaySplitView" id="split_view">
         <property name="show-sidebar">True</property>
         <property name="min-sidebar-width">200</property>
-        <property name="max-sidebar-width">320</property>
+        <property name="max-sidebar-width">480</property>
         <property name="sidebar-width-fraction">0.28</property>
         <property name="sidebar">
           <object class="AdwNavigationPage">

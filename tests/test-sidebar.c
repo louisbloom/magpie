@@ -114,6 +114,21 @@ test_folder_row_is_compact (Fixture *f, gconstpointer ud)
 }
 
 static void
+test_account_row_title_is_single_line (Fixture *f, gconstpointer ud)
+{
+  /* Regression: AdwActionRow's title-lines defaults to 0 (unlimited
+   * wrap), which turns a long email like "thomasc1971@hotmail.com"
+   * into a two-line row in a narrow sidebar and pushes the subtitle
+   * around. The fix pins title and subtitle to single-line + ellipsize. */
+  GtkListBox *list_box = _mail_sidebar_get_list_box_for_test (f->sidebar);
+  GtkListBoxRow *account = gtk_list_box_get_row_at_index (list_box, 0);
+  g_assert_nonnull (account);
+  g_assert_true (ADW_IS_ACTION_ROW (account));
+  g_assert_cmpint (adw_action_row_get_title_lines (ADW_ACTION_ROW (account)), ==, 1);
+  g_assert_cmpint (adw_action_row_get_subtitle_lines (ADW_ACTION_ROW (account)), ==, 1);
+}
+
+static void
 test_account_row_is_not_activatable (Fixture *f, gconstpointer ud)
 {
   /* Account rows are headers and must not respond to activation. */
@@ -267,6 +282,8 @@ main (int argc,
               Fixture, NULL, fixture_set_up, test_folder_row_is_activatable, fixture_tear_down);
   g_test_add ("/sidebar/folder-row-compact",
               Fixture, NULL, fixture_set_up, test_folder_row_is_compact, fixture_tear_down);
+  g_test_add ("/sidebar/account-row-title-single-line",
+              Fixture, NULL, fixture_set_up, test_account_row_title_is_single_line, fixture_tear_down);
   g_test_add ("/sidebar/account-row-not-activatable",
               Fixture, NULL, fixture_set_up, test_account_row_is_not_activatable, fixture_tear_down);
   g_test_add ("/sidebar/folder-activation-emits-signal",

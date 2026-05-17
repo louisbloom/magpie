@@ -145,6 +145,11 @@ build_account_row (MailSidebarItem *it,
   adw_preferences_row_set_title (ADW_PREFERENCES_ROW (row), it->title);
   if (it->subtitle != NULL && it->subtitle[0] != '\0')
     adw_action_row_set_subtitle (row, it->subtitle);
+  /* Pin to single-line + ellipsize on overflow. Default is 0 (unlimited
+   * wrap), which turns long identities like "thomasc1971@hotmail.com"
+   * into a two-line row that pushes the subtitle around. */
+  adw_action_row_set_title_lines (row, 1);
+  adw_action_row_set_subtitle_lines (row, 1);
 
   gtk_widget_add_css_class (GTK_WIDGET (row), "heading");
   gtk_list_box_row_set_activatable (GTK_LIST_BOX_ROW (row), FALSE);
