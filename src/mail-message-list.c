@@ -178,7 +178,8 @@ on_messages_loaded (GObject *source,
       g_list_store_append (self->store, ri);
       g_object_unref (ri);
     }
-  gtk_stack_set_visible_child_name (self->stack, messages->len > 0 ? "list" : "empty");
+  gtk_stack_set_visible_child_name (self->stack,
+                                    messages->len > 0 ? "list" : "folder-empty");
 
   g_object_unref (self);
   g_free (ctx);
@@ -221,6 +222,13 @@ _mail_message_list_get_list_box_for_test (MailMessageList *self)
 {
   g_return_val_if_fail (MAIL_IS_MESSAGE_LIST (self), NULL);
   return self->list_box;
+}
+
+GtkStack *
+_mail_message_list_get_stack_for_test (MailMessageList *self)
+{
+  g_return_val_if_fail (MAIL_IS_MESSAGE_LIST (self), NULL);
+  return self->stack;
 }
 
 static void
@@ -287,6 +295,15 @@ mail_message_list_init (MailMessageList *self)
   AdwStatusPage *loading = ADW_STATUS_PAGE (adw_status_page_new ());
   adw_status_page_set_title (loading, "Loading messages…");
   gtk_stack_add_named (self->stack, GTK_WIDGET (loading), "loading");
+
+  /* "folder-empty" — distinct from "empty" so the wording matches the
+   * situation: the user *did* select a folder, it just has nothing in
+   * it. See mail-message-list.c::on_messages_loaded. */
+  AdwStatusPage *folder_empty = ADW_STATUS_PAGE (adw_status_page_new ());
+  adw_status_page_set_icon_name (folder_empty, "mail-read-symbolic");
+  adw_status_page_set_title (folder_empty, "No messages");
+  adw_status_page_set_description (folder_empty, "This folder is empty.");
+  gtk_stack_add_named (self->stack, GTK_WIDGET (folder_empty), "folder-empty");
 
   /* "list"
    *

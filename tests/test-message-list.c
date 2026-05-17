@@ -191,6 +191,34 @@ test_no_warnings_when_realized_and_snapshotted (Fixture *f, gconstpointer ud)
 }
 
 static void
+test_empty_folder_shows_folder_empty_state (void)
+{
+  /* Regression: selecting a folder that loads successfully with zero
+   * messages used to fall back to the initial "Select a folder"
+   * status page, telling the user to pick a folder they had just
+   * picked. The fix routes that case to a distinct "folder-empty"
+   * status page ("No messages — This folder is empty."). */
+  MailBackend *fake = mail_backend_fake_new ();
+  /* Seed an empty folder so list_messages returns successfully but
+   * with 0 rows (mail_backend_fake_set_messages with n=0). */
+  mail_backend_fake_set_messages (fake, "empty-folder", NULL, 0);
+
+  MailMessageList *list = MAIL_MESSAGE_LIST (mail_message_list_new ());
+  g_object_ref_sink (list);
+
+  mail_message_list_load (list, fake, "empty-folder", 10);
+  pump_main_loop ();
+
+  GtkStack *stack = _mail_message_list_get_stack_for_test (list);
+  g_assert_nonnull (stack);
+  g_assert_cmpstr (gtk_stack_get_visible_child_name (stack), ==, "folder-empty");
+
+  g_object_unref (list);
+  pump_main_loop ();
+  mail_backend_destroy (fake);
+}
+
+static void
 test_markup_special_chars (void)
 {
   /* Each entry combines at least one of the four chars that broke the
@@ -249,6 +277,8 @@ main (int argc,
               Fixture, NULL, fixture_set_up,
               test_no_warnings_when_realized_and_snapshotted,
               fixture_tear_down);
+  g_test_add_func ("/message-list/empty-folder-shows-folder-empty-state",
+                   test_empty_folder_shows_folder_empty_state);
   g_test_add_func ("/message-list/no-markup-warnings-for-special-chars",
                    test_markup_special_chars);
   return g_test_run ();

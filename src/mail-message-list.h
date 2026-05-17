@@ -27,4 +27,7 @@ void mail_message_list_load (MailMessageList *self,
 /* Test-only: borrowed pointer to the internal GtkListBox. */
 GtkListBox *_mail_message_list_get_list_box_for_test (MailMessageList *self);
 
+/* Test-only: borrowed pointer to the internal state GtkStack. */
+GtkStack *_mail_message_list_get_stack_for_test (MailMessageList *self);
+
 G_END_DECLS
