@@ -19,9 +19,13 @@ GtkWidget *mail_sidebar_new (void);
  *                       const char* folder_id,
  *                       MailAccount* account,
  *                       const char* folder_display_name)
- *       — Emitted when the user activates a folder row. All pointers
+ *       — Emitted when the user selects a folder row. All pointers
  *         are borrowed; folder_id / display_name are valid until the
  *         sidebar reloads that folder's account.
+ *
+ *   account-selected   (MailAccount* account)
+ *       — Emitted when the user selects an account row (or the row
+ *         is selected programmatically via mail_sidebar_select_account).
  *
  *   account-added      (MailAccount* account)
  *       — Emitted each time an account row is appended (via GOA or via
@@ -33,6 +37,12 @@ GtkWidget *mail_sidebar_new (void);
  *         account row. The sidebar does NOT start the sync itself;
  *         the window owns the cancellable and the progress page.
  */
+
+/* Programmatically move the selection to @acct's row. Triggers the
+ * account-selected signal (via GtkListBox's row-selected machinery).
+ * No-op if @acct isn't in the sidebar. */
+void mail_sidebar_select_account (MailSidebar *self,
+                                  MailAccount *acct);
 
 /* Re-issue list_folders against the account's store_backend and
  * rebuild that account's folder rows. Call this after a sync pass

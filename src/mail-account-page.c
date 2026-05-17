@@ -1,16 +1,18 @@
-/* mail-sync-progress-page.c - Centered ring + status + Cancel.
+/* mail-account-page.c - Centered ring + status + Cancel.
  *
  * The page is owned by mail-window and re-bound to a different
- * (sync, cancellable, account identity) every time a new pass starts.
- * Old signal handlers are disconnected on rebind.
+ * (sync, cancellable, account identity) on every account selection.
+ * Old signal handlers are disconnected on rebind. Passing sync=NULL
+ * to set_state renders the idle state (account selected, no active
+ * sync): heading is just the identity, no ring, no cancel button.
  */
 
 #include "config.h"
 
+#include "mail-account-page.h"
 #include "mail-progress-ring.h"
-#include "mail-sync-progress-page.h"
 
-struct _MailSyncProgressPage
+struct _MailAccountPage
 {
   AdwNavigationPage parent;
 
@@ -25,17 +27,17 @@ struct _MailSyncProgressPage
   gulong notify_status_id;
 };
 
-G_DEFINE_FINAL_TYPE (MailSyncProgressPage, mail_sync_progress_page, ADW_TYPE_NAVIGATION_PAGE)
+G_DEFINE_FINAL_TYPE (MailAccountPage, mail_account_page, ADW_TYPE_NAVIGATION_PAGE)
 
 static void
-update_progress (MailSyncProgressPage *self)
+update_progress (MailAccountPage *self)
 {
   if (self->sync != NULL)
     mail_progress_ring_set_fraction (self->ring, mail_sync_get_progress (self->sync));
 }
 
 static void
-update_status (MailSyncProgressPage *self)
+update_status (MailAccountPage *self)
 {
   if (self->sync != NULL)
     gtk_label_set_label (self->status, mail_sync_get_status (self->sync));
@@ -61,14 +63,14 @@ static void
 on_cancel_clicked (GtkButton *btn,
                    gpointer user_data)
 {
-  MailSyncProgressPage *self = user_data;
+  MailAccountPage *self = user_data;
   if (self->cancellable != NULL && !g_cancellable_is_cancelled (self->cancellable))
     g_cancellable_cancel (self->cancellable);
   gtk_widget_set_sensitive (GTK_WIDGET (btn), FALSE);
 }
 
 static void
-disconnect_sync (MailSyncProgressPage *self)
+disconnect_sync (MailAccountPage *self)
 {
   if (self->sync == NULL)
     return;
@@ -86,12 +88,12 @@ disconnect_sync (MailSyncProgressPage *self)
 }
 
 void
-mail_sync_progress_page_set_state (MailSyncProgressPage *self,
-                                   MailSync *sync,
-                                   GCancellable *cancellable,
-                                   const char *account_identity)
+mail_account_page_set_state (MailAccountPage *self,
+                             MailSync *sync,
+                             GCancellable *cancellable,
+                             const char *account_identity)
 {
-  g_return_if_fail (MAIL_IS_SYNC_PROGRESS_PAGE (self));
+  g_return_if_fail (MAIL_IS_ACCOUNT_PAGE (self));
 
   disconnect_sync (self);
   g_clear_object (&self->cancellable);
@@ -109,39 +111,44 @@ mail_sync_progress_page_set_state (MailSyncProgressPage *self,
   if (cancellable != NULL)
     self->cancellable = g_object_ref (cancellable);
 
-  if (account_identity != NULL)
+  const char *identity = (account_identity != NULL) ? account_identity : "";
+  if (sync != NULL)
     {
-      g_autofree char *text = g_strdup_printf ("Syncing %s", account_identity);
+      g_autofree char *text = g_strdup_printf ("Syncing %s", identity);
       gtk_label_set_label (self->heading, text);
+      gtk_widget_set_visible (GTK_WIDGET (self->ring), TRUE);
+      gtk_widget_set_visible (GTK_WIDGET (self->cancel_button), TRUE);
+      gtk_widget_set_sensitive (GTK_WIDGET (self->cancel_button), self->cancellable != NULL);
     }
   else
     {
-      gtk_label_set_label (self->heading, "Syncing");
+      gtk_label_set_label (self->heading, identity);
+      gtk_label_set_label (self->status, "No sync in progress. Click refresh to sync.");
+      gtk_widget_set_visible (GTK_WIDGET (self->ring), FALSE);
+      gtk_widget_set_visible (GTK_WIDGET (self->cancel_button), FALSE);
     }
-
-  gtk_widget_set_sensitive (GTK_WIDGET (self->cancel_button), self->cancellable != NULL);
 }
 
 GtkWidget *
-mail_sync_progress_page_new (void)
+mail_account_page_new (void)
 {
-  return g_object_new (MAIL_TYPE_SYNC_PROGRESS_PAGE, NULL);
+  return g_object_new (MAIL_TYPE_ACCOUNT_PAGE, NULL);
 }
 
 static void
-mail_sync_progress_page_dispose (GObject *object)
+mail_account_page_dispose (GObject *object)
 {
-  MailSyncProgressPage *self = MAIL_SYNC_PROGRESS_PAGE (object);
+  MailAccountPage *self = MAIL_ACCOUNT_PAGE (object);
   disconnect_sync (self);
   g_clear_object (&self->cancellable);
-  G_OBJECT_CLASS (mail_sync_progress_page_parent_class)->dispose (object);
+  G_OBJECT_CLASS (mail_account_page_parent_class)->dispose (object);
 }
 
 static void
-mail_sync_progress_page_init (MailSyncProgressPage *self)
+mail_account_page_init (MailAccountPage *self)
 {
-  adw_navigation_page_set_title (ADW_NAVIGATION_PAGE (self), "Syncing");
-  adw_navigation_page_set_tag (ADW_NAVIGATION_PAGE (self), "sync-progress");
+  adw_navigation_page_set_title (ADW_NAVIGATION_PAGE (self), "Account");
+  adw_navigation_page_set_tag (ADW_NAVIGATION_PAGE (self), "account");
 
   GtkWidget *toolbar = adw_toolbar_view_new ();
   GtkWidget *header = adw_header_bar_new ();
@@ -156,7 +163,7 @@ mail_sync_progress_page_init (MailSyncProgressPage *self)
   gtk_widget_set_halign (GTK_WIDGET (self->ring), GTK_ALIGN_CENTER);
   gtk_box_append (GTK_BOX (box), GTK_WIDGET (self->ring));
 
-  self->heading = GTK_LABEL (gtk_label_new ("Syncing"));
+  self->heading = GTK_LABEL (gtk_label_new (""));
   gtk_widget_add_css_class (GTK_WIDGET (self->heading), "title-2");
   gtk_box_append (GTK_BOX (box), GTK_WIDGET (self->heading));
 
@@ -175,8 +182,8 @@ mail_sync_progress_page_init (MailSyncProgressPage *self)
 }
 
 static void
-mail_sync_progress_page_class_init (MailSyncProgressPageClass *klass)
+mail_account_page_class_init (MailAccountPageClass *klass)
 {
   GObjectClass *object_class = G_OBJECT_CLASS (klass);
-  object_class->dispose = mail_sync_progress_page_dispose;
+  object_class->dispose = mail_account_page_dispose;
 }

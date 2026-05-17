@@ -32,8 +32,8 @@ mail_SOURCES = \
     mail-progress-ring.h \
     mail-refresh-button.c \
     mail-refresh-button.h \
-    mail-sync-progress-page.c \
-    mail-sync-progress-page.h \
+    mail-account-page.c \
+    mail-account-page.h \
     mail-backend-msgraph.c \
     mail-backend-msgraph.h \
     mail-backend-imap.c \

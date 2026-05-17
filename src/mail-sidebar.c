@@ -115,6 +115,7 @@ struct _MailSidebar
 enum
 {
   SIGNAL_FOLDER_SELECTED,
+  SIGNAL_ACCOUNT_SELECTED,
   SIGNAL_ACCOUNT_ADDED,
   SIGNAL_REFRESH_REQUESTED,
   N_SIGNALS,
@@ -215,8 +216,10 @@ build_account_row (MailSidebarItem *it,
   gtk_box_append (GTK_BOX (box), refresh);
 
   GtkWidget *row = gtk_list_box_row_new ();
-  gtk_list_box_row_set_activatable (GTK_LIST_BOX_ROW (row), FALSE);
-  gtk_list_box_row_set_selectable (GTK_LIST_BOX_ROW (row), FALSE);
+  /* Account rows are first-class selection targets: clicking one shows
+   * the account page in the right pane. */
+  gtk_list_box_row_set_activatable (GTK_LIST_BOX_ROW (row), TRUE);
+  gtk_list_box_row_set_selectable (GTK_LIST_BOX_ROW (row), TRUE);
   gtk_list_box_row_set_child (GTK_LIST_BOX_ROW (row), box);
   return row;
 }
@@ -287,11 +290,13 @@ build_row_widget (gpointer item,
 }
 
 static void
-on_row_activated (GtkListBox *list_box,
-                  GtkListBoxRow *row,
-                  gpointer user_data)
+on_row_selected (GtkListBox *list_box,
+                 GtkListBoxRow *row,
+                 gpointer user_data)
 {
   MailSidebar *self = MAIL_SIDEBAR (user_data);
+  if (row == NULL)
+    return;
   guint index = gtk_list_box_row_get_index (row);
   g_autoptr (GObject) item = g_list_model_get_item (G_LIST_MODEL (self->store), index);
   if (item == NULL)
@@ -301,6 +306,8 @@ on_row_activated (GtkListBox *list_box,
     g_signal_emit (self, signals[SIGNAL_FOLDER_SELECTED], 0,
                    it->account->store_backend, it->folder_id, it->account,
                    it->title);
+  else if (it->kind == MAIL_SIDEBAR_ITEM_ACCOUNT && it->account != NULL)
+    g_signal_emit (self, signals[SIGNAL_ACCOUNT_SELECTED], 0, it->account);
 }
 
 static guint
@@ -384,6 +391,23 @@ sidebar_add_account (MailSidebar *self,
     }
 
   g_signal_emit (self, signals[SIGNAL_ACCOUNT_ADDED], 0, acct);
+}
+
+void
+mail_sidebar_select_account (MailSidebar *self,
+                             MailAccount *acct)
+{
+  g_return_if_fail (MAIL_IS_SIDEBAR (self));
+  g_return_if_fail (acct != NULL);
+  guint index = find_account_index (self, acct);
+  if (index == G_MAXUINT)
+    return;
+  GtkListBoxRow *row = gtk_list_box_get_row_at_index (self->list_box, (int) index);
+  if (row == NULL)
+    return;
+  /* Setting the selection fires GtkListBox::row-selected, which we
+   * dispatch to account-selected via on_row_selected. */
+  gtk_list_box_select_row (self->list_box, row);
 }
 
 /* Reload folders for an account from its store_backend; called after a
@@ -509,6 +533,11 @@ mail_sidebar_class_init (MailSidebarClass *klass)
                                                   G_TYPE_STRING,
                                                   G_TYPE_POINTER,
                                                   G_TYPE_STRING);
+  signals[SIGNAL_ACCOUNT_SELECTED] = g_signal_new ("account-selected",
+                                                   G_TYPE_FROM_CLASS (klass),
+                                                   G_SIGNAL_RUN_LAST,
+                                                   0, NULL, NULL, NULL,
+                                                   G_TYPE_NONE, 1, G_TYPE_POINTER);
   signals[SIGNAL_ACCOUNT_ADDED] = g_signal_new ("account-added",
                                                 G_TYPE_FROM_CLASS (klass),
                                                 G_SIGNAL_RUN_LAST,
@@ -548,8 +577,8 @@ mail_sidebar_init (MailSidebar *self)
   gtk_widget_add_css_class (GTK_WIDGET (self->list_box), "navigation-sidebar");
   gtk_list_box_bind_model (self->list_box, G_LIST_MODEL (self->store),
                            build_row_widget, self, NULL);
-  g_signal_connect (self->list_box, "row-activated",
-                    G_CALLBACK (on_row_activated), self);
+  g_signal_connect (self->list_box, "row-selected",
+                    G_CALLBACK (on_row_selected), self);
 
   gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scroller), GTK_WIDGET (self->list_box));
 

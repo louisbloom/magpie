@@ -2,10 +2,10 @@
 
 #include "config.h"
 
+#include "mail-account-page.h"
 #include "mail-message-list.h"
 #include "mail-message-view.h"
 #include "mail-sidebar.h"
-#include "mail-sync-progress-page.h"
 #include "mail-window.h"
 
 struct _MailWindow
@@ -25,11 +25,12 @@ struct _MailWindow
   GtkToggleButton *plain_toggle;
 
   /* Added programmatically. */
-  MailSyncProgressPage *progress_page;
+  MailAccountPage *account_page;
 
   /* Sync orchestration. */
   MailAccount *current_account;      /* borrowed; the account currently driving the right pane */
   char *current_folder_id;           /* g_strdup'd; folder displayed in message-list (or NULL) */
+  gboolean account_mode;             /* TRUE when the sidebar selection is an account row */
   GCancellable *current_pass_cancel; /* ref'd; set while a sync pass is in flight */
   MailAccount *current_pass_account; /* borrowed; account the in-flight pass belongs to */
 };
@@ -39,6 +40,7 @@ G_DEFINE_FINAL_TYPE (MailWindow, mail_window, ADW_TYPE_APPLICATION_WINDOW)
 /* Forward decls. */
 static void recompute_nav_stack (MailWindow *self);
 static void on_account_added (MailSidebar *sidebar, MailAccount *acct, gpointer user_data);
+static void on_account_selected (MailSidebar *sidebar, MailAccount *acct, gpointer user_data);
 static void on_refresh_requested (MailSidebar *sidebar, MailAccount *acct, gpointer user_data);
 static void on_sync_running_notify (GObject *src, GParamSpec *pspec, gpointer user_data);
 static void schedule_sidebar_width_update (MailWindow *self);
@@ -63,9 +65,13 @@ account_is_syncing (MailAccount *acct)
 static void
 recompute_nav_stack (MailWindow *self)
 {
-  if (account_is_syncing (self->current_account))
+  /* The account page is shown when the sidebar selection is an account
+   * row, OR when the current folder's account is in the middle of a
+   * sync pass (auto-swap from message-list to account page so the user
+   * sees progress instead of stale list data during the pass). */
+  if (self->account_mode || account_is_syncing (self->current_account))
     {
-      const char *tags[] = { "sync-progress" };
+      const char *tags[] = { "account" };
       adw_navigation_view_replace_with_tags (self->nav_view, tags, 1);
     }
   else
@@ -93,6 +99,7 @@ on_folder_selected (MailSidebar *sidebar,
   self->current_account = acct;
   g_free (self->current_folder_id);
   self->current_folder_id = g_strdup (folder_id);
+  self->account_mode = FALSE;
   /* Reflect the selected folder + account in the content header. The
    * AdwWindowTitle gives us a two-line layout: folder on top,
    * account identity (email) below. The AdwNavigationPage::title is
@@ -132,6 +139,34 @@ on_message_activated (MailMessageList *list,
                                  (subject != NULL && subject[0] != '\0') ? subject : "Message");
   adw_navigation_view_push_by_tag (self->nav_view, "message-view");
   mail_message_view_load (self->message_view, backend, message_id);
+}
+
+static void
+on_account_selected (MailSidebar *sidebar,
+                     MailAccount *acct,
+                     gpointer user_data)
+{
+  MailWindow *self = MAIL_WINDOW (user_data);
+  if (acct == NULL)
+    return;
+  self->current_account = acct;
+  g_clear_pointer (&self->current_folder_id, g_free);
+  self->account_mode = TRUE;
+  /* Bind the account page: pass acct->sync if a pass is in flight for
+   * this account, else NULL for the idle render. */
+  MailSync *sync_for_page = account_is_syncing (acct) ? acct->sync : NULL;
+  GCancellable *cancel_for_page = (sync_for_page != NULL && self->current_pass_account == acct)
+                                      ? self->current_pass_cancel
+                                      : NULL;
+  mail_account_page_set_state (self->account_page, sync_for_page, cancel_for_page, acct->identity);
+  /* Update the right pane's titlebar to reflect the account selection. */
+  if (acct->identity != NULL)
+    {
+      adw_navigation_page_set_title (self->message_list_page, acct->identity);
+      adw_window_title_set_title (self->message_list_title, acct->identity);
+      adw_window_title_set_subtitle (self->message_list_title, "");
+    }
+  recompute_nav_stack (self);
 }
 
 static void
@@ -227,19 +262,25 @@ on_refresh_requested (MailSidebar *sidebar,
   if (mail_sync_is_running (acct->sync))
     return;
 
-  /* Set the progress page state to point at this sync. The page is
+  /* Set the account page state to point at this sync. The page is
    * the same widget instance every time; we just rebind its state. */
   g_clear_object (&self->current_pass_cancel);
   self->current_pass_cancel = g_cancellable_new ();
   self->current_pass_account = acct;
-  mail_sync_progress_page_set_state (self->progress_page,
-                                     acct->sync,
-                                     self->current_pass_cancel,
-                                     acct->identity);
+  mail_account_page_set_state (self->account_page,
+                               acct->sync,
+                               self->current_pass_cancel,
+                               acct->identity);
 
   mail_sync_run_async (acct->sync, acct->remote_backend, acct->store,
                        self->current_pass_cancel,
                        on_sync_done, self);
+
+  /* Hop the sidebar selection to this account so the user sees the
+   * account page (which now shows progress) instead of being left on
+   * a folder while the right pane shows sync. */
+  if (!self->account_mode || self->current_account != acct)
+    mail_sidebar_select_account (self->sidebar, acct);
 }
 
 static void
@@ -248,9 +289,16 @@ on_sync_running_notify (GObject *src,
                         gpointer user_data)
 {
   MailWindow *self = MAIL_WINDOW (user_data);
-  /* Find which account this sync belongs to among the sidebar's. We
-   * don't strictly need to know — we only act if it's the current one. */
-  if (self->current_account != NULL && self->current_account->sync == MAIL_SYNC (src))
+  /* We only react if the sync is for the currently-shown account. */
+  if (self->current_account == NULL || self->current_account->sync != MAIL_SYNC (src))
+    return;
+  /* If a sync just started on the current account and the user is in
+   * folder-mode, hop the sidebar selection over to the account row.
+   * That selection triggers on_account_selected, which rebinds the
+   * account page and calls recompute_nav_stack. */
+  if (mail_sync_is_running (MAIL_SYNC (src)) && !self->account_mode)
+    mail_sidebar_select_account (self->sidebar, self->current_account);
+  else
     recompute_nav_stack (self);
 }
 
@@ -326,14 +374,16 @@ mail_window_init (MailWindow *self)
   g_signal_connect (self->plain_toggle, "notify::active",
                     G_CALLBACK (on_plain_toggle_active_changed), self);
 
-  /* Add the sync-progress page to the nav view so it can be swapped
-   * in via adw_navigation_view_replace_with_tags. It is never shown
-   * as the initial page. */
-  self->progress_page = MAIL_SYNC_PROGRESS_PAGE (mail_sync_progress_page_new ());
-  adw_navigation_view_add (self->nav_view, ADW_NAVIGATION_PAGE (self->progress_page));
+  /* Add the account page to the nav view so it can be swapped in via
+   * adw_navigation_view_replace_with_tags. It is never shown as the
+   * initial page. */
+  self->account_page = MAIL_ACCOUNT_PAGE (mail_account_page_new ());
+  adw_navigation_view_add (self->nav_view, ADW_NAVIGATION_PAGE (self->account_page));
 
   g_signal_connect (self->sidebar, "folder-selected",
                     G_CALLBACK (on_folder_selected), self);
+  g_signal_connect (self->sidebar, "account-selected",
+                    G_CALLBACK (on_account_selected), self);
   g_signal_connect (self->message_list, "message-activated",
                     G_CALLBACK (on_message_activated), self);
   g_signal_connect (self->sidebar, "account-added",

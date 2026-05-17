@@ -3,7 +3,7 @@
  * Paints a track circle and an overlaid arc sweep from 12 o'clock
  * clockwise to `fraction * 2π`. Sized via the standard GTK4 measure
  * protocol — the parent picks the radius. Used at small size in the
- * sidebar refresh button and at full size in the sync-progress page.
+ * sidebar refresh button and at full size in the account page.
  */
 
 #pragma once
