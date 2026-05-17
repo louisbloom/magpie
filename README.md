@@ -9,13 +9,22 @@ backends for Microsoft Graph and IMAP.
 Provide a fast, HIG-correct mail reader that fits the GNOME desktop the
 same way Files, Calendar, or Contacts do — no Electron, no JavaScript,
 no per-provider GUI quirks. Accounts come from the user's GOA session;
-the app discovers them, talks to each provider through a small backend
-vtable, and renders the result with stock libadwaita widgets.
+the app discovers them, syncs each account's messages to a local
+Maildir + sqlite index, and renders the result with stock libadwaita
+widgets.
+
+Storage is local-first (mutt / gnus-style): the UI always reads from
+the on-disk store under `~/Mail/<identity>/`, and remote providers are
+contacted only when the user explicitly triggers a sync from the
+account page. The provider then reconciles its message list into the
+store, pulling new bodies and pruning ones that have disappeared
+upstream.
 
 The scope is deliberately narrow at this stage: browse the folders of
-your configured accounts, read messages (raw RFC822 with an optional
-decoded text/plain view), and nothing else. Sending, search, threading,
-and rich rendering are explicit follow-ups, not held-back features.
+your configured accounts, trigger and watch syncs, and read messages
+(raw RFC822 with an optional decoded text/plain view). Sending, search,
+threading, push notifications, and rich rendering are explicit
+follow-ups, not held-back features.
 
 ## Principles
 
@@ -24,8 +33,9 @@ because they're how to evaluate a change, not just describe one.
 
 - **Native GNOME, not a port.** `org.gnome.Mail` app id, GTK4 widgets,
   libadwaita layout primitives (`AdwOverlaySplitView`,
-  `AdwNavigationView`, `AdwActionRow`, `AdwHeaderBar`). The HIG is the
-  reference; if a behaviour clashes with the HIG, the HIG wins.
+  `AdwNavigationView`, `AdwHeaderBar`, `AdwWindowTitle`,
+  `AdwStatusPage`). The HIG is the reference; if a behaviour clashes
+  with the HIG, the HIG wins.
 
 - **C, not Rust.** The codebase is plain C against GLib / GTK / GIO /
   libsoup / json-glib / GMime / libetpan. Autotools builds. No new
@@ -58,36 +68,68 @@ because they're how to evaluate a change, not just describe one.
 
 - **Provider-agnostic core.** The UI talks only to `MailBackend`. New
   providers are new vtable implementations; the existing widgets don't
-  know about HTTP, IMAP, or OAuth. A `mail-backend-fake` lives under
-  `tests/` so regression tests run headless without network or GOA
-  accounts.
+  know about HTTP, IMAP, or OAuth. The same vtable is implemented by
+  `mail-backend-store` (UI-facing, reads from the local sqlite + Maildir
+  store) and by the per-provider backends (`mail-backend-msgraph`,
+  `mail-backend-imap`) consumed by `MailSync`. A `mail-backend-fake`
+  lives under `tests/` so regression tests run headless without network
+  or GOA accounts.
 
 - **Reuse the GNOME platform.** GMime for MIME, libsoup for HTTP,
-  json-glib for JSON, libetpan for IMAP, GOA for OAuth refresh. We do
-  not reinvent what the platform already maintains.
+  json-glib for JSON, libetpan for IMAP, sqlite3 for the local index,
+  GOA for OAuth refresh. We do not reinvent what the platform already
+  maintains.
 
 ## Status
 
-Early prototype. The initial step provides:
+Early prototype. The current shape:
 
-- A toggleable sidebar listing accounts from `GoaClient` and the
-  folders inside each account, with provider icons.
-- A right-hand pane that switches between a message list (root) and a
-  message viewer (pushed via `AdwNavigationView`) for the selected
-  message, with a header-bar toggle between raw RFC822 and the decoded
-  text/plain alternative when one is available.
-- Microsoft Graph backend (functional) and IMAP backend (compile-only
-  stub) selected per-account via GOA's reported provider type.
-- A `tests/` suite with arena, accounts, sidebar, backend-contract,
-  message-list, and MIME extractor coverage running under
-  `gtk_test_init`.
+- **Sidebar.** Toggleable left pane listing accounts from `GoaClient`
+  with provider icons; per-account folder rows below each header. Both
+  account and folder rows are selectable navigation targets. Sidebar
+  width is content-driven (pinned to the widest row) so it doesn't
+  ballooon on widescreen displays.
+- **Right pane.** Three pages routed through `AdwNavigationView`: the
+  message list (a virtualizing `GtkListView` over the local store, so
+  10k-row folders open instantly and scroll smoothly), the message
+  viewer (pushed on row activation, with a header-bar toggle between
+  raw RFC822 and the decoded text/plain alternative when one is
+  available), and the account page (shown when an account row is
+  selected, or auto-switched-to when a sync starts on the current
+  account).
+- **Account page.** `AdwStatusPage`-based body with a "Sync now" button
+  in the idle state; during a pass the same slot shows a centered
+  progress ring, a live status line, a sliding-window ETA ("About 3
+  minutes remaining"), and a Cancel button. The header bar carries an
+  `AdwWindowTitle` with the account identity over the provider name.
+- **Sync engine.** `MailSync` is a per-account one-shot reconciler:
+  list folders → list messages per folder → fetch new bodies → upsert
+  into the local store. Triggered manually from the account page; no
+  startup sync, no timer. Pagination runs to completion (no per-pass
+  message cap); a `messages.remote_id` UNIQUE constraint keeps repeat
+  passes idempotent.
+- **Local store.** `MailStore` owns a Maildir tree + sqlite index at
+  `~/Mail/<identity>/`. The UI reads through `mail-backend-store` (a
+  `MailBackend` implementation that wraps the store), so the
+  rendering path never blocks on the network and the sync engine is
+  the only thing that talks to providers.
+- **Providers.** Microsoft Graph (functional, with `@odata.nextLink`
+  pagination); IMAP (compile-only stub). Selection is per-account via
+  GOA's reported provider type.
+- **Tests.** Twelve test binaries under `tests/`, running under
+  `gtk_test_init` where they touch widgets: `test-arena`,
+  `test-accounts`, `test-sidebar`, `test-backend-contract`,
+  `test-message-list`, `test-message-view`, `test-mime`, `test-store`,
+  `test-backend-store`, `test-sync`, `test-eta`, `test-account-page`.
+  Every bug fix lands with a regression test (see the principles).
 
 ## Build
 
 ```sh
 sudo dnf install gnome-online-accounts-devel libsoup3-devel \
                  json-glib-devel libetpan-devel libsecret-devel \
-                 gtk4-devel libadwaita-devel gmime30-devel
+                 gtk4-devel libadwaita-devel gmime30-devel \
+                 sqlite-devel
 
 ./autogen.sh
 mkdir -p build && cd build
