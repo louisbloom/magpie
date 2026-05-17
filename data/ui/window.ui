@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<interface>
+  <requires lib="gtk" version="4.10"/>
+  <requires lib="Adw" version="1.4"/>
+  <template class="MailWindow" parent="AdwApplicationWindow">
+    <property name="title">Mail</property>
+    <property name="default-width">1100</property>
+    <property name="default-height">700</property>
+    <child>
+      <object class="AdwBreakpoint">
+        <condition>max-width: 550sp</condition>
+        <setter object="split_view" property="collapsed">True</setter>
+      </object>
+    </child>
+    <property name="content">
+      <object class="AdwOverlaySplitView" id="split_view">
+        <property name="show-sidebar">True</property>
+        <property name="min-sidebar-width">200</property>
+        <property name="max-sidebar-width">320</property>
+        <property name="sidebar-width-fraction">0.28</property>
+        <property name="sidebar">
+          <object class="AdwNavigationPage">
+            <property name="title">Mail</property>
+            <property name="tag">sidebar</property>
+            <property name="child">
+              <object class="AdwToolbarView">
+                <child type="top">
+                  <object class="AdwHeaderBar"/>
+                </child>
+                <property name="content">
+                  <object class="MailSidebar" id="sidebar"/>
+                </property>
+              </object>
+            </property>
+          </object>
+        </property>
+        <property name="content">
+          <object class="AdwNavigationPage">
+            <property name="title">Mail</property>
+            <property name="tag">content</property>
+            <property name="child">
+              <object class="AdwNavigationView" id="nav_view">
+                <child>
+                  <object class="AdwNavigationPage">
+                    <property name="tag">message-list</property>
+                    <property name="title">Mail</property>
+                    <property name="child">
+                      <object class="AdwToolbarView">
+                        <child type="top">
+                          <object class="AdwHeaderBar">
+                            <child type="start">
+                              <object class="GtkToggleButton" id="sidebar_toggle">
+                                <property name="icon-name">sidebar-show-symbolic</property>
+                                <property name="tooltip-text" translatable="yes">Toggle sidebar</property>
+                              </object>
+                            </child>
+                          </object>
+                        </child>
+                        <property name="content">
+                          <object class="MailMessageList" id="message_list"/>
+                        </property>
+                      </object>
+                    </property>
+                  </object>
+                </child>
+                <child>
+                  <object class="AdwNavigationPage" id="message_view_page">
+                    <property name="tag">message-view</property>
+                    <property name="title">Message</property>
+                    <property name="child">
+                      <object class="AdwToolbarView">
+                        <child type="top">
+                          <object class="AdwHeaderBar">
+                            <child type="end">
+                              <object class="GtkToggleButton" id="plain_toggle">
+                                <property name="icon-name">view-paged-symbolic</property>
+                                <property name="tooltip-text" translatable="yes">Show plain text</property>
+                                <property name="visible">False</property>
+                              </object>
+                            </child>
+                          </object>
+                        </child>
+                        <property name="content">
+                          <object class="MailMessageView" id="message_view"/>
+                        </property>
+                      </object>
+                    </property>
+                  </object>
+                </child>
+              </object>
+            </property>
+          </object>
+        </property>
+      </object>
+    </property>
+  </template>
+</interface>

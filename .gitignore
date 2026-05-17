@@ -1,0 +1,91 @@
+# Autotools
+/aclocal.m4
+/autom4te.cache/
+/build-aux/compile
+/build-aux/depcomp
+/build-aux/install-sh
+/build-aux/missing
+/build-aux/ar-lib
+/build-aux/test-driver
+/config.h*
+/config.log
+/config.status
+/configure
+/version
+/stamp-h1
+Makefile
+Makefile.in
+
+# Build artifacts
+*.o
+*.a
+*.la
+*.lo
+.libs/
+.deps/
+/build/
+
+# GResource generated bundles
+*-resources.c
+/data/*.gresource
+
+# Test outputs
+*.log
+*.trs
+/test-suite.log
+
+# Crash dumps (kept around while debugging; never commit)
+core
+core.*
+vgcore.*
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+
+# Misc
+*.tmp
+*.bak
+.env
+compile_commands.json
+.cache/
+.ccls-cache/
+.clangd/
+
+# AI assistants — per-user state, caches, chat history, and tool-local
+# config. If any of these are ever meant to be shared with the team
+# (e.g. a project-wide CLAUDE.md or AGENTS.md), negate them explicitly
+# with `!path` below.
+.claude/
+.cursor/
+.cursorrules
+.cursorignore
+.aider*
+.continue/
+.copilot/
+.github/copilot-instructions.md
+.codeium/
+.cody/
+.cline/
+.roo/
+.roomodes
+.kilocode/
+.kilocodemodes
+.opencode/
+.opencode.json
+.windsurf/
+.windsurfrules
+.tabnine/
+.tabnine_root
+.specify/
+.openhands/
+.ai/
+.agent/
+.agents/
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+.gemini/

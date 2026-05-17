@@ -1,0 +1,7 @@
+GNOME Mail NEWS
+===============
+
+Unreleased
+----------
+* Initial scaffold: GTK4 + libadwaita application, GOA-backed sidebar,
+  Microsoft Graph and IMAP backends, raw RFC822 viewer.
