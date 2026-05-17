@@ -284,6 +284,70 @@ test_empty_remote_still_succeeds (void)
   rm_rf (root);
 }
 
+static void
+test_large_folder_syncs_all_messages (void)
+{
+  /* Regression: a hard-coded MAIL_SYNC_TOP_N = 200 cap used to limit
+   * how many messages sync wrote per folder per pass, so real inboxes
+   * with thousands of messages were permanently missing tail history.
+   * The fix removes the constant and passes G_MAXINT to the backend's
+   * list_messages_async, relying on backend pagination to fetch
+   * everything. Seed 1000 messages and assert all 1000 land. */
+  enum
+  {
+    N = 1000
+  };
+  g_autoptr (GError) error = NULL;
+  g_autofree char *root = g_dir_make_tmp ("mail-sync-XXXXXX", &error);
+  g_assert_no_error (error);
+  MailStore *local = mail_store_open (root, "u@example.com", &error);
+  g_assert_no_error (error);
+
+  MailBackend *remote = mail_backend_fake_new ();
+  FakeFolderSpec folders[] = {
+    { "f-big", "Big", NULL, 0, N },
+  };
+  mail_backend_fake_set_folders (remote, folders, G_N_ELEMENTS (folders));
+
+  GArray *specs = g_array_new (FALSE, FALSE, sizeof (FakeMessageSpec));
+  GPtrArray *strings = g_ptr_array_new_with_free_func (g_free);
+  for (int i = 0; i < N; i++)
+    {
+      char *id = g_strdup_printf ("m%04d", i);
+      char *subj = g_strdup_printf ("Subject %04d", i);
+      char *body = g_strdup_printf ("Body %04d", i);
+      g_ptr_array_add (strings, id);
+      g_ptr_array_add (strings, subj);
+      g_ptr_array_add (strings, body);
+      FakeMessageSpec spec = {
+        .id = id,
+        .subject = subj,
+        .from = "a@b.c",
+        .received_unix = 1700000000 + i,
+        .unread = FALSE,
+        .raw_rfc822 = body,
+      };
+      g_array_append_val (specs, spec);
+    }
+  mail_backend_fake_set_messages (remote, "f-big",
+                                  (FakeMessageSpec *) specs->data, specs->len);
+
+  MailSync *sync = mail_sync_new ();
+  run_to_completion (sync, remote, local, NULL);
+
+  GHashTable *mids = mail_store_message_remote_ids (local, "f-big", &error);
+  g_assert_no_error (error);
+  g_assert_cmpuint (g_hash_table_size (mids), ==, N);
+  g_hash_table_unref (mids);
+
+  g_object_unref (sync);
+  mail_backend_destroy (remote);
+  mail_store_close (local);
+  rm_rf (root);
+  g_array_unref (specs);
+  g_ptr_array_unref (strings);
+}
+
 int
 main (int argc,
       char **argv)
@@ -294,5 +358,6 @@ main (int argc,
   g_test_add_func ("/mail-sync/removed-messages-deleted", test_removed_messages_get_deleted_locally);
   g_test_add_func ("/mail-sync/removed-folder-deleted", test_removed_folder_gets_deleted_locally);
   g_test_add_func ("/mail-sync/empty-remote", test_empty_remote_still_succeeds);
+  g_test_add_func ("/mail-sync/large-folder-syncs-all", test_large_folder_syncs_all_messages);
   return g_test_run ();
 }

@@ -299,7 +299,9 @@ start_next_list (MailSync *self)
   set_status (self, g_strdup_printf ("Scanning folders (%u / %u)…", k, n));
 
   const char *folder_id = g_ptr_array_index (self->folder_remote_ids, self->folder_index);
-  mail_backend_list_messages_async (self->remote, folder_id, MAIL_SYNC_TOP_N,
+  /* G_MAXINT signals "no upper bound" — paginate until the backend
+   * runs out of pages. Per-page sizing is the backend's concern. */
+  mail_backend_list_messages_async (self->remote, folder_id, G_MAXINT,
                                     self->cancellable, on_messages_done, self);
 }
 

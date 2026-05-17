@@ -27,6 +27,12 @@
 
 #define MSGRAPH_BASE "https://graph.microsoft.com/v1.0"
 
+/* Graph's documented per-page maximum for /me/mailFolders/{id}/messages
+ * is 1000; anything larger is silently capped server-side. We always
+ * request a full page and let the pagination loop walk @odata.nextLink
+ * until the caller's total cap is hit or the link is absent. */
+#define MSGRAPH_MESSAGES_PAGE_SIZE 1000
+
 typedef struct
 {
   MailBackend base;
@@ -479,8 +485,10 @@ mb_msgraph_list_messages_async (MailBackend *base,
 
   g_autofree char *escaped = g_uri_escape_string (folder_id, NULL, FALSE);
   ListMessagesJob *job = g_new0 (ListMessagesJob, 1);
+  /* Always request a full Graph page; the caller's cap (top_n) is
+   * enforced by the pagination loop in on_messages_response. */
   job->url = g_strdup_printf (MSGRAPH_BASE "/me/mailFolders/%s/messages?$top=%d&$orderby=receivedDateTime%%20desc&$select=id,subject,from,receivedDateTime,isRead",
-                              escaped, top_n);
+                              escaped, MSGRAPH_MESSAGES_PAGE_SIZE);
   job->messages = g_ptr_array_new ();
   job->top_n = top_n;
   g_object_set_data_full (G_OBJECT (task), "job", job, list_messages_job_free);

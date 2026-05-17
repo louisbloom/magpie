@@ -10,12 +10,12 @@
  *
  * Per pass (see plan):
  *   1. list_folders -> upsert into local; delete locally-only folders
- *   2. per folder, list_messages(200) -> diff by remote_id;
- *      delete locally-only messages within the window
+ *   2. per folder, list_messages -> diff by remote_id; delete
+ *      locally-only messages
  *   3. per new message, fetch_message_raw -> write_raw -> upsert row
  *
- * Out of scope for v1: delta queries, local->remote push, parallel
- * fetches, deletion detection outside the top-N window.
+ * Out of scope for v1: delta queries (currently a full re-scan per
+ * pass), local->remote push, parallel fetches.
  */
 
 #pragma once
@@ -29,9 +29,6 @@ G_BEGIN_DECLS
 
 #define MAIL_TYPE_SYNC (mail_sync_get_type ())
 G_DECLARE_FINAL_TYPE (MailSync, mail_sync, MAIL, SYNC, GObject)
-
-/* Top-N messages pulled per folder per pass. */
-#define MAIL_SYNC_TOP_N 200
 
 MailSync *mail_sync_new (void);
 
