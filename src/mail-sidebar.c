@@ -134,26 +134,21 @@ mail_sidebar_emit_refresh_for_button (MailSidebar *self,
   g_signal_emit (self, signals[SIGNAL_REFRESH_REQUESTED], 0, acct);
 }
 
-/* Account rows: AdwActionRow (one per account; provider icon prefix,
- * identity title, provider-name subtitle, refresh-button suffix). */
+/* Account rows: hand-rolled GtkListBoxRow with the same horizontal
+ * margins (start=12, end=6) as the folder rows below, so the provider
+ * icon lines up with the folder icons and the refresh button lines up
+ * with the unread-count badges. AdwActionRow added its own internal
+ * prefix/suffix padding which pushed the icons out of alignment and
+ * stole the space the email needed to render in full. */
 static GtkWidget *
 build_account_row (MailSidebarItem *it,
                    MailSidebar *self)
 {
-  AdwActionRow *row = ADW_ACTION_ROW (adw_action_row_new ());
-  adw_preferences_row_set_use_markup (ADW_PREFERENCES_ROW (row), FALSE);
-  adw_preferences_row_set_title (ADW_PREFERENCES_ROW (row), it->title);
-  if (it->subtitle != NULL && it->subtitle[0] != '\0')
-    adw_action_row_set_subtitle (row, it->subtitle);
-  /* Pin to single-line + ellipsize on overflow. Default is 0 (unlimited
-   * wrap), which turns long identities like "thomasc1971@hotmail.com"
-   * into a two-line row that pushes the subtitle around. */
-  adw_action_row_set_title_lines (row, 1);
-  adw_action_row_set_subtitle_lines (row, 1);
-
-  gtk_widget_add_css_class (GTK_WIDGET (row), "heading");
-  gtk_list_box_row_set_activatable (GTK_LIST_BOX_ROW (row), FALSE);
-  gtk_list_box_row_set_selectable (GTK_LIST_BOX_ROW (row), FALSE);
+  GtkWidget *box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
+  gtk_widget_set_margin_top (box, 6);
+  gtk_widget_set_margin_bottom (box, 6);
+  gtk_widget_set_margin_start (box, 12);
+  gtk_widget_set_margin_end (box, 6);
 
   GtkWidget *image = NULL;
   if (it->account != NULL && it->account->provider_icon != NULL)
@@ -165,16 +160,47 @@ build_account_row (MailSidebarItem *it,
   if (image == NULL)
     image = gtk_image_new_from_icon_name ("mail-symbolic");
   gtk_image_set_pixel_size (GTK_IMAGE (image), 24);
-  adw_action_row_add_prefix (row, image);
+  gtk_widget_set_valign (image, GTK_ALIGN_CENTER);
+  gtk_box_append (GTK_BOX (box), image);
+
+  /* Title + subtitle vbox. No ellipsize and no single-line cap — the
+   * user wants the full identity visible; if the sidebar is dragged
+   * narrow enough to overflow, the title wraps rather than truncates. */
+  GtkWidget *vbox = gtk_box_new (GTK_ORIENTATION_VERTICAL, 2);
+  gtk_widget_set_hexpand (vbox, TRUE);
+  gtk_widget_set_valign (vbox, GTK_ALIGN_CENTER);
+
+  GtkWidget *title = gtk_label_new (it->title);
+  gtk_label_set_xalign (GTK_LABEL (title), 0.0);
+  gtk_label_set_use_markup (GTK_LABEL (title), FALSE);
+  gtk_label_set_wrap (GTK_LABEL (title), TRUE);
+  gtk_label_set_wrap_mode (GTK_LABEL (title), PANGO_WRAP_WORD_CHAR);
+  gtk_widget_add_css_class (title, "heading");
+  gtk_box_append (GTK_BOX (vbox), title);
+
+  if (it->subtitle != NULL && it->subtitle[0] != '\0')
+    {
+      GtkWidget *subtitle = gtk_label_new (it->subtitle);
+      gtk_label_set_xalign (GTK_LABEL (subtitle), 0.0);
+      gtk_label_set_use_markup (GTK_LABEL (subtitle), FALSE);
+      gtk_widget_add_css_class (subtitle, "caption");
+      gtk_widget_add_css_class (subtitle, "dim-label");
+      gtk_box_append (GTK_BOX (vbox), subtitle);
+    }
+  gtk_box_append (GTK_BOX (box), vbox);
 
   GtkWidget *refresh = mail_refresh_button_new (it->account != NULL ? it->account->sync : NULL);
   g_object_set_data (G_OBJECT (refresh), "mail-sidebar-account", it->account);
   g_signal_connect_swapped (refresh, "clicked",
                             G_CALLBACK (mail_sidebar_emit_refresh_for_button), self);
   gtk_widget_set_valign (refresh, GTK_ALIGN_CENTER);
-  adw_action_row_add_suffix (row, refresh);
+  gtk_box_append (GTK_BOX (box), refresh);
 
-  return GTK_WIDGET (row);
+  GtkWidget *row = gtk_list_box_row_new ();
+  gtk_list_box_row_set_activatable (GTK_LIST_BOX_ROW (row), FALSE);
+  gtk_list_box_row_set_selectable (GTK_LIST_BOX_ROW (row), FALSE);
+  gtk_list_box_row_set_child (GTK_LIST_BOX_ROW (row), box);
+  return row;
 }
 
 /* Folder rows: dense single-line GtkListBoxRow (~28-32 px tall) —
