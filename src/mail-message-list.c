@@ -71,8 +71,6 @@ struct _MailMessageList
    * backend, plus a cancellable we can cancel on subsequent loads. */
   MailBackend *current_backend; /* borrowed */
   GCancellable *cancellable;
-
-  gboolean signals_connected; /* idempotency guard for realize-time hookup */
 };
 
 G_DEFINE_FINAL_TYPE (MailMessageList, mail_message_list, GTK_TYPE_WIDGET)
@@ -226,64 +224,6 @@ _mail_message_list_get_list_box_for_test (MailMessageList *self)
 }
 
 static void
-on_page_to_never (AdwNavigationPage *page,
-                  gpointer user_data)
-{
-  MailMessageList *self = MAIL_MESSAGE_LIST (user_data);
-  gtk_scrolled_window_set_policy (self->scroller,
-                                  GTK_POLICY_NEVER, GTK_POLICY_NEVER);
-}
-
-static void
-on_page_to_automatic (AdwNavigationPage *page,
-                      gpointer user_data)
-{
-  MailMessageList *self = MAIL_MESSAGE_LIST (user_data);
-  /* Horizontal stays NEVER — rows don't overflow horizontally. Only
-   * the vertical axis flips between NEVER (during animation) and
-   * AUTOMATIC (once the page settles). */
-  gtk_scrolled_window_set_policy (self->scroller,
-                                  GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
-}
-
-static void
-mail_message_list_realize (GtkWidget *widget)
-{
-  GTK_WIDGET_CLASS (mail_message_list_parent_class)->realize (widget);
-
-  MailMessageList *self = MAIL_MESSAGE_LIST (widget);
-  if (self->signals_connected)
-    return;
-
-  /* Walk up to our containing AdwNavigationPage. When the widget is
-   * hosted outside an AdwNavigationView — e.g. test-sidebar / test-
-   * message-list parent it directly to a GtkWindow — this returns NULL
-   * and we leave the scroller at its initial NEVER policy. The tests
-   * only assert on widget tree shape and warning counts, so the
-   * missing scrollbar in those scenarios is harmless. */
-  GtkWidget *ancestor = gtk_widget_get_ancestor (widget, ADW_TYPE_NAVIGATION_PAGE);
-  if (ancestor == NULL)
-    return;
-  AdwNavigationPage *page = ADW_NAVIGATION_PAGE (ancestor);
-
-  g_signal_connect_object (page, "showing",
-                           G_CALLBACK (on_page_to_never), self, 0);
-  g_signal_connect_object (page, "hiding",
-                           G_CALLBACK (on_page_to_never), self, 0);
-  g_signal_connect_object (page, "shown",
-                           G_CALLBACK (on_page_to_automatic), self, 0);
-  self->signals_connected = TRUE;
-
-  /* Root-page startup: the message-list page IS the visible page when
-   * the window first realizes, and AdwNavigationPage::shown doesn't
-   * retro-emit for that. Set AUTOMATIC immediately so the scrollbar
-   * appears as needed without requiring a navigate-away-and-back. */
-  GtkWidget *view = gtk_widget_get_ancestor (widget, ADW_TYPE_NAVIGATION_VIEW);
-  if (view != NULL && adw_navigation_view_get_visible_page (ADW_NAVIGATION_VIEW (view)) == page)
-    on_page_to_automatic (page, self);
-}
-
-static void
 mail_message_list_dispose (GObject *object)
 {
   MailMessageList *self = MAIL_MESSAGE_LIST (object);
@@ -307,7 +247,6 @@ mail_message_list_class_init (MailMessageListClass *klass)
   GtkWidgetClass *widget_class = GTK_WIDGET_CLASS (klass);
 
   object_class->dispose = mail_message_list_dispose;
-  widget_class->realize = mail_message_list_realize;
   gtk_widget_class_set_layout_manager_type (widget_class, GTK_TYPE_BIN_LAYOUT);
 
   signals[SIGNAL_MESSAGE_ACTIVATED] = g_signal_new ("message-activated",
@@ -351,17 +290,20 @@ mail_message_list_init (MailMessageList *self)
 
   /* "list"
    *
-   * Initial policy is NEVER on both axes; mail_message_list_realize
-   * connects to the containing AdwNavigationPage's lifecycle signals
-   * and flips the vertical axis to AUTOMATIC on `shown`, back to NEVER
-   * on `showing` / `hiding`. The horizontal axis stays NEVER (rows
-   * don't overflow). Overlay scrolling stays off so the scrollbar's
-   * eventual appearance doesn't fade-animate either — see the matching
-   * comment in mail-message-view.c for the bt-confirmed rationale. */
+   * Vertical scroll AUTOMATIC; horizontal stays NEVER (rows don't
+   * overflow). Critically: propagate-natural-{width,height}=FALSE so
+   * the GtkListBox's full row-count natural height (50 rows × 52 px ≈
+   * 2600 px) does NOT flow upward through this scroller and through
+   * GtkStack's vhomogeneous=TRUE max-of-children measure — the
+   * AdwOverlaySplitView would otherwise warn about exceeding the
+   * window height on every relayout. Overlay scrolling stays off so
+   * the scrollbar doesn't fade-animate. */
   self->scroller = GTK_SCROLLED_WINDOW (gtk_scrolled_window_new ());
   gtk_scrolled_window_set_policy (self->scroller,
-                                  GTK_POLICY_NEVER, GTK_POLICY_NEVER);
+                                  GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
   gtk_scrolled_window_set_overlay_scrolling (self->scroller, FALSE);
+  gtk_scrolled_window_set_propagate_natural_width (self->scroller, FALSE);
+  gtk_scrolled_window_set_propagate_natural_height (self->scroller, FALSE);
   self->list_box = GTK_LIST_BOX (gtk_list_box_new ());
   gtk_widget_add_css_class (GTK_WIDGET (self->list_box), "navigation-sidebar");
   gtk_list_box_bind_model (self->list_box, G_LIST_MODEL (self->store),

@@ -14,11 +14,30 @@ G_DECLARE_FINAL_TYPE (MailSidebar, mail_sidebar, MAIL, SIDEBAR, GtkWidget)
 
 GtkWidget *mail_sidebar_new (void);
 
-/*
- * Emitted when the user activates a folder row. backend is borrowed
- * (owned by the corresponding MailAccount); folder_id is borrowed and
- * valid until the sidebar reloads that folder's account.
+/* Signals:
+ *   folder-selected    (MailBackend* store_backend,
+ *                       const char* folder_id,
+ *                       MailAccount* account)
+ *       — Emitted when the user activates a folder row. All pointers
+ *         are borrowed; folder_id is valid until the sidebar reloads
+ *         that folder's account.
+ *
+ *   account-added      (MailAccount* account)
+ *       — Emitted each time an account row is appended (via GOA or via
+ *         mail_sidebar_add_test_account). The window subscribes so it
+ *         can wire account-level UI (e.g. notify::running on acct->sync).
+ *
+ *   refresh-requested  (MailAccount* account)
+ *       — Emitted when the user clicks the refresh button on an
+ *         account row. The sidebar does NOT start the sync itself;
+ *         the window owns the cancellable and the progress page.
  */
+
+/* Re-issue list_folders against the account's store_backend and
+ * rebuild that account's folder rows. Call this after a sync pass
+ * completes so freshly-synced folders appear immediately. */
+void mail_sidebar_reload_folders (MailSidebar *self,
+                                  MailAccount *acct);
 
 /* ------------------------------------------------------------------
  * Test-only hooks.

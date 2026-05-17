@@ -16,16 +16,35 @@
  * The window binds those to a GtkToggleButton in the header bar so
  * toggling the view re-renders the existing buffer with no re-fetch.
  *
- * Scrollbar gating: the GtkScrolledWindow's policy is GTK_POLICY_NEVER
- * while any AdwNavigationView page-swap animation is running, and flips
- * to GTK_POLICY_AUTOMATIC once AdwNavigationPage::shown fires. The
- * AUTOMATIC re-evaluation that decides "do we need a scrollbar"
- * otherwise races against the animation's snapshot pass and emits
- *   Gtk-WARNING: Trying to snapshot GtkGizmo without a current allocation
- * deep inside the scrollbar's internal slider gizmo subtree (confirmed
- * by gdb backtrace). Gating the policy on the page's lifecycle is the
- * libadwaita-blessed way to coordinate with the animation; see commit
- * history if needed for the prior pinned-ALWAYS workaround.
+ * Scrollbar gating — two cooperating mechanisms (both required):
+ *
+ *  (1) propagate-natural-{width,height} = FALSE on the scroller.
+ *      Without this, opening a message with base64 attachments (~1500
+ *      wrapped lines, ~17 kpx) causes the GtkTextView's natural to
+ *      flow upward and AdwOverlaySplitView warns about exceeding the
+ *      MailWindow height on every measure pass.
+ *
+ *  (2) POLICY_EXTERNAL ↔ POLICY_AUTOMATIC dance keyed on the
+ *      containing AdwNavigationPage's `showing`/`hiding`/`shown`
+ *      signals. While the page is animating in or hidden, policy is
+ *      EXTERNAL so no scrollbar widget exists (and thus no internal
+ *      trough/slider GtkGizmo subtree to snapshot before allocation
+ *      settles); once `shown` fires we flip to AUTOMATIC so a real
+ *      scrollbar appears as needed.
+ *
+ *      Important: POLICY_NEVER does NOT work here — it also hides
+ *      the scrollbar widget, but it forces the scroller to allocate
+ *      its child the full natural size (ignoring propagate-natural-*),
+ *      which re-triggers the AdwOverlaySplitView height warning.
+ *      POLICY_EXTERNAL hides the scrollbar and still honours
+ *      propagate-natural-*=FALSE, so it satisfies both constraints.
+ *
+ *      Without the dance, the AUTOMATIC scrollbar's internal gizmo
+ *      subtree races against AdwNavigationView's first allocation
+ *      pass and the frame clock emits
+ *        Gtk-WARNING: Trying to snapshot GtkGizmo without a current allocation
+ *      (confirmed by debug_break_on_gizmo_warning in main.c: the bad
+ *      widget is always the scrollbar trough).
  */
 
 #include "config.h"
@@ -232,7 +251,7 @@ on_page_to_never (AdwNavigationPage *page,
 {
   MailMessageView *self = MAIL_MESSAGE_VIEW (user_data);
   gtk_scrolled_window_set_policy (self->scroller,
-                                  GTK_POLICY_NEVER, GTK_POLICY_NEVER);
+                                  GTK_POLICY_EXTERNAL, GTK_POLICY_EXTERNAL);
 }
 
 static void
@@ -253,19 +272,11 @@ mail_message_view_realize (GtkWidget *widget)
   if (self->signals_connected)
     return;
 
-  /* Find our containing AdwNavigationPage (if any). When the widget is
-   * hosted outside an AdwNavigationView — e.g. in tests/test-message-view.c
-   * which puts the view in a plain GtkWindow — this returns NULL and we
-   * leave the scroller at its initial NEVER policy. The visible-window
-   * tests only assert on warning counts, so the missing scrollbar is
-   * harmless there. */
   GtkWidget *ancestor = gtk_widget_get_ancestor (widget, ADW_TYPE_NAVIGATION_PAGE);
   if (ancestor == NULL)
     return;
   AdwNavigationPage *page = ADW_NAVIGATION_PAGE (ancestor);
 
-  /* g_signal_connect_object auto-disconnects when either object is
-   * finalized; no manual disconnect needed in dispose. */
   g_signal_connect_object (page, "showing",
                            G_CALLBACK (on_page_to_never), self, 0);
   g_signal_connect_object (page, "hiding",
@@ -274,11 +285,6 @@ mail_message_view_realize (GtkWidget *widget)
                            G_CALLBACK (on_page_to_automatic), self, 0);
   self->signals_connected = TRUE;
 
-  /* AdwNavigationPage::shown does not retro-emit for a page that's
-   * already the visible page when the widget realizes — handle that
-   * startup case explicitly so the root pane (if it's ever the
-   * message-view, which it isn't here, but cheap insurance) gets
-   * AUTOMATIC immediately. */
   GtkWidget *view = gtk_widget_get_ancestor (widget, ADW_TYPE_NAVIGATION_VIEW);
   if (view != NULL && adw_navigation_view_get_visible_page (ADW_NAVIGATION_VIEW (view)) == page)
     on_page_to_automatic (page, self);
@@ -330,16 +336,13 @@ mail_message_view_init (MailMessageView *self)
 {
   self->cancellable = g_cancellable_new ();
 
-  /* Initial policy is NEVER on both axes; mail_message_view_realize
-   * connects to the containing AdwNavigationPage's lifecycle signals
-   * and flips to AUTOMATIC on `shown`, back to NEVER on `showing` /
-   * `hiding`. See the top-of-file comment for the rationale. Overlay
-   * scrolling stays off so the scrollbar's eventual appearance
-   * doesn't fade-animate either. */
   self->scroller = GTK_SCROLLED_WINDOW (gtk_scrolled_window_new ());
+  /* See top-of-file comment. Both lines are required together. */
   gtk_scrolled_window_set_policy (self->scroller,
-                                  GTK_POLICY_NEVER, GTK_POLICY_NEVER);
+                                  GTK_POLICY_EXTERNAL, GTK_POLICY_EXTERNAL);
   gtk_scrolled_window_set_overlay_scrolling (self->scroller, FALSE);
+  gtk_scrolled_window_set_propagate_natural_width (self->scroller, FALSE);
+  gtk_scrolled_window_set_propagate_natural_height (self->scroller, FALSE);
   gtk_widget_set_parent (GTK_WIDGET (self->scroller), GTK_WIDGET (self));
 
   self->buffer = gtk_text_buffer_new (NULL);

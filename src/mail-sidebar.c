@@ -20,6 +20,8 @@
 
 #include "mail-sidebar.h"
 
+#include "mail-refresh-button.h"
+
 #include <adwaita.h>
 #include <goa/goa.h>
 
@@ -113,12 +115,24 @@ struct _MailSidebar
 enum
 {
   SIGNAL_FOLDER_SELECTED,
+  SIGNAL_ACCOUNT_ADDED,
+  SIGNAL_REFRESH_REQUESTED,
   N_SIGNALS,
 };
 
 static guint signals[N_SIGNALS];
 
 G_DEFINE_FINAL_TYPE (MailSidebar, mail_sidebar, GTK_TYPE_WIDGET)
+
+static void
+mail_sidebar_emit_refresh_for_button (MailSidebar *self,
+                                      GtkWidget *button)
+{
+  MailAccount *acct = g_object_get_data (G_OBJECT (button), "mail-sidebar-account");
+  if (acct == NULL)
+    return;
+  g_signal_emit (self, signals[SIGNAL_REFRESH_REQUESTED], 0, acct);
+}
 
 static GtkWidget *
 build_row_widget (gpointer item,
@@ -152,6 +166,15 @@ build_row_widget (gpointer item,
         image = gtk_image_new_from_icon_name ("mail-symbolic");
       gtk_image_set_pixel_size (GTK_IMAGE (image), 24);
       adw_action_row_add_prefix (row, image);
+
+      /* Refresh button. Disabled for test accounts (no sync). */
+      MailSidebar *self = user_data;
+      GtkWidget *refresh = mail_refresh_button_new (it->account != NULL ? it->account->sync : NULL);
+      g_object_set_data (G_OBJECT (refresh), "mail-sidebar-account", it->account);
+      g_signal_connect_swapped (refresh, "clicked",
+                                G_CALLBACK (mail_sidebar_emit_refresh_for_button), self);
+      gtk_widget_set_valign (refresh, GTK_ALIGN_CENTER);
+      adw_action_row_add_suffix (row, refresh);
     }
   else
     {
@@ -190,7 +213,7 @@ on_row_activated (GtkListBox *list_box,
   MailSidebarItem *it = MAIL_SIDEBAR_ITEM (item);
   if (it->kind == MAIL_SIDEBAR_ITEM_FOLDER && it->folder_id != NULL)
     g_signal_emit (self, signals[SIGNAL_FOLDER_SELECTED], 0,
-                   it->account->backend, it->folder_id);
+                   it->account->store_backend, it->folder_id, it->account);
 }
 
 static guint
@@ -223,7 +246,7 @@ on_list_folders_done (GObject *source,
   MailAccount *acct = ctx->acct;
   g_autoptr (GError) error = NULL;
 
-  GPtrArray *folders = mail_backend_list_folders_finish (acct->backend, result, &error);
+  GPtrArray *folders = mail_backend_list_folders_finish (acct->store_backend, result, &error);
   if (folders == NULL)
     {
       if (error == NULL || !g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
@@ -264,14 +287,48 @@ sidebar_add_account (MailSidebar *self,
   g_list_store_append (self->store, row);
   g_object_unref (row);
 
-  if (acct->backend != NULL)
+  if (acct->store_backend != NULL)
     {
       LoadFoldersCtx *ctx = g_new (LoadFoldersCtx, 1);
       ctx->self = g_object_ref (self);
       ctx->acct = acct;
-      mail_backend_list_folders_async (acct->backend, self->cancellable,
+      mail_backend_list_folders_async (acct->store_backend, self->cancellable,
                                        on_list_folders_done, ctx);
     }
+
+  g_signal_emit (self, signals[SIGNAL_ACCOUNT_ADDED], 0, acct);
+}
+
+/* Reload folders for an account from its store_backend; called after a
+ * sync completes so freshly-synced folders appear without a relaunch. */
+void
+mail_sidebar_reload_folders (MailSidebar *self,
+                             MailAccount *acct)
+{
+  g_return_if_fail (MAIL_IS_SIDEBAR (self));
+  g_return_if_fail (acct != NULL);
+  if (acct->store_backend == NULL)
+    return;
+
+  /* Remove existing folder rows for this account. They sit between the
+   * account row and the next account row (or the end). */
+  guint anchor = find_account_index (self, acct);
+  if (anchor == G_MAXUINT)
+    return;
+  guint i = anchor + 1;
+  while (i < g_list_model_get_n_items (G_LIST_MODEL (self->store)))
+    {
+      g_autoptr (MailSidebarItem) it = g_list_model_get_item (G_LIST_MODEL (self->store), i);
+      if (it->kind != MAIL_SIDEBAR_ITEM_FOLDER || it->account != acct)
+        break;
+      g_list_store_remove (self->store, i);
+    }
+
+  LoadFoldersCtx *ctx = g_new (LoadFoldersCtx, 1);
+  ctx->self = g_object_ref (self);
+  ctx->acct = acct;
+  mail_backend_list_folders_async (acct->store_backend, self->cancellable,
+                                   on_list_folders_done, ctx);
 }
 
 static void
@@ -360,9 +417,20 @@ mail_sidebar_class_init (MailSidebarClass *klass)
                                                   0,
                                                   NULL, NULL, NULL,
                                                   G_TYPE_NONE,
-                                                  2,
+                                                  3,
                                                   G_TYPE_POINTER,
-                                                  G_TYPE_STRING);
+                                                  G_TYPE_STRING,
+                                                  G_TYPE_POINTER);
+  signals[SIGNAL_ACCOUNT_ADDED] = g_signal_new ("account-added",
+                                                G_TYPE_FROM_CLASS (klass),
+                                                G_SIGNAL_RUN_LAST,
+                                                0, NULL, NULL, NULL,
+                                                G_TYPE_NONE, 1, G_TYPE_POINTER);
+  signals[SIGNAL_REFRESH_REQUESTED] = g_signal_new ("refresh-requested",
+                                                    G_TYPE_FROM_CLASS (klass),
+                                                    G_SIGNAL_RUN_LAST,
+                                                    0, NULL, NULL, NULL,
+                                                    G_TYPE_NONE, 1, G_TYPE_POINTER);
 }
 
 static void

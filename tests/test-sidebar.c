@@ -110,12 +110,14 @@ typedef struct
   guint count;
   char *folder_id;
   gpointer backend;
+  gpointer account;
 } SignalCapture;
 
 static void
 on_folder_selected (MailSidebar *s,
                     gpointer backend,
                     const char *folder_id,
+                    gpointer account,
                     gpointer user_data)
 {
   SignalCapture *cap = user_data;
@@ -123,6 +125,7 @@ on_folder_selected (MailSidebar *s,
   g_free (cap->folder_id);
   cap->folder_id = g_strdup (folder_id);
   cap->backend = backend;
+  cap->account = account;
 }
 
 static void
@@ -143,9 +146,88 @@ test_folder_activation_emits_signal (Fixture *f, gconstpointer ud)
   g_assert_cmpuint (cap.count, ==, 1);
   g_assert_cmpstr (cap.folder_id, ==, "inbox");
   g_assert_true (cap.backend == f->fake);
+  g_assert_nonnull (cap.account);
 
   g_signal_handler_disconnect (f->sidebar, handler);
   g_free (cap.folder_id);
+}
+
+typedef struct
+{
+  guint count;
+  gpointer account;
+} AccountAddedCapture;
+
+static void
+on_account_added (MailSidebar *s,
+                  gpointer acct,
+                  gpointer user_data)
+{
+  AccountAddedCapture *cap = user_data;
+  cap->count++;
+  cap->account = acct;
+}
+
+static void
+test_account_added_signal_fires_for_test_account (Fixture *f, gconstpointer ud)
+{
+  /* mail_sidebar_add_test_account ran in fixture_set_up before we
+   * connected — so use a fresh sidebar to observe the signal. */
+  AccountAddedCapture cap = { 0 };
+  MailBackend *fake2 = mail_backend_fake_new ();
+  MailAccount *acct = mail_account_new_for_test (fake2, "two@example.com", "Two");
+  MailSidebar *sb = MAIL_SIDEBAR (mail_sidebar_new ());
+  g_object_ref_sink (sb);
+  g_signal_connect (sb, "account-added", G_CALLBACK (on_account_added), &cap);
+  mail_sidebar_add_test_account (sb, acct);
+  g_assert_cmpuint (cap.count, ==, 1);
+  g_assert_true (cap.account == acct);
+  pump_main_loop ();
+  g_object_unref (sb);
+}
+
+static void
+test_refresh_requested_signal_fires_on_button_click (Fixture *f, gconstpointer ud)
+{
+  /* The refresh button is added as an action-row suffix in build_row_widget.
+   * Find it by walking the account row's descendants. */
+  GtkListBox *list_box = _mail_sidebar_get_list_box_for_test (f->sidebar);
+  GtkListBoxRow *account_row = gtk_list_box_get_row_at_index (list_box, 0);
+  g_assert_nonnull (account_row);
+
+  GtkWidget *button = NULL;
+  for (GtkWidget *w = gtk_widget_get_first_child (GTK_WIDGET (account_row));
+       w != NULL && button == NULL;
+       w = gtk_widget_get_next_sibling (w))
+    {
+      /* Recursive descent until we find any GtkButton in the subtree. */
+      GQueue stack = G_QUEUE_INIT;
+      g_queue_push_tail (&stack, w);
+      while (!g_queue_is_empty (&stack) && button == NULL)
+        {
+          GtkWidget *cur = g_queue_pop_head (&stack);
+          if (GTK_IS_BUTTON (cur))
+            {
+              button = cur;
+              break;
+            }
+          for (GtkWidget *c = gtk_widget_get_first_child (cur);
+               c != NULL;
+               c = gtk_widget_get_next_sibling (c))
+            g_queue_push_tail (&stack, c);
+        }
+      g_queue_clear (&stack);
+    }
+  g_assert_nonnull (button);
+
+  guint refresh_count = 0;
+  g_signal_connect_swapped (f->sidebar, "refresh-requested",
+                            G_CALLBACK (g_atomic_int_inc), &refresh_count);
+  /* The button itself is sensitive iff sync != NULL. For test
+   * accounts sync is NULL, so the button is insensitive and "clicked"
+   * normally won't fire — but g_signal_emit_by_name forces it. */
+  g_signal_emit_by_name (button, "clicked");
+  g_assert_cmpuint (refresh_count, ==, 1);
 }
 
 int
@@ -163,6 +245,12 @@ main (int argc,
               Fixture, NULL, fixture_set_up, test_account_row_is_not_activatable, fixture_tear_down);
   g_test_add ("/sidebar/folder-activation-emits-signal",
               Fixture, NULL, fixture_set_up, test_folder_activation_emits_signal, fixture_tear_down);
+  g_test_add ("/sidebar/account-added-signal",
+              Fixture, NULL, fixture_set_up,
+              test_account_added_signal_fires_for_test_account, fixture_tear_down);
+  g_test_add ("/sidebar/refresh-requested-signal",
+              Fixture, NULL, fixture_set_up,
+              test_refresh_requested_signal_fires_on_button_click, fixture_tear_down);
 
   return g_test_run ();
 }

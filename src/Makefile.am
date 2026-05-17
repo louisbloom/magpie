@@ -20,8 +20,20 @@ mail_SOURCES = \
     mail-mime.h \
     mail-account.c \
     mail-account.h \
+    mail-store.c \
+    mail-store.h \
     mail-backend.h \
     mail-backend.c \
+    mail-backend-store.c \
+    mail-backend-store.h \
+    mail-sync.c \
+    mail-sync.h \
+    mail-progress-ring.c \
+    mail-progress-ring.h \
+    mail-refresh-button.c \
+    mail-refresh-button.h \
+    mail-sync-progress-page.c \
+    mail-sync-progress-page.h \
     mail-backend-msgraph.c \
     mail-backend-msgraph.h \
     mail-backend-imap.c \
@@ -48,7 +60,8 @@ AM_CPPFLAGS = \
     $(GOA_CFLAGS) \
     $(SOUP_CFLAGS) \
     $(JSON_GLIB_CFLAGS) \
-    $(GMIME_CFLAGS)
+    $(GMIME_CFLAGS) \
+    $(SQLITE_CFLAGS)
 
 mail_LDADD = \
     $(GTK_LIBS) \
@@ -57,4 +70,5 @@ mail_LDADD = \
     $(SOUP_LIBS) \
     $(JSON_GLIB_LIBS) \
     $(GMIME_LIBS) \
+    $(SQLITE_LIBS) \
     $(LIBETPAN_LIBS)

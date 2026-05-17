@@ -1,6 +1,6 @@
 # tests/Makefile.am - Unit tests for GNOME Mail.
 
-UNIT_TESTS = test-arena test-accounts test-sidebar test-backend-contract test-message-list test-message-view test-mime
+UNIT_TESTS = test-arena test-accounts test-sidebar test-backend-contract test-message-list test-message-view test-mime test-store test-backend-store test-sync
 
 check_PROGRAMS = $(UNIT_TESTS)
 TESTS          = $(UNIT_TESTS)
@@ -12,7 +12,8 @@ AM_CPPFLAGS = \
     $(GOA_CFLAGS) \
     $(JSON_GLIB_CFLAGS) \
     $(SOUP_CFLAGS) \
-    $(GMIME_CFLAGS)
+    $(GMIME_CFLAGS) \
+    $(SQLITE_CFLAGS)
 
 LDADD = \
     $(GTK_LIBS) \
@@ -20,7 +21,8 @@ LDADD = \
     $(GOA_LIBS) \
     $(JSON_GLIB_LIBS) \
     $(SOUP_LIBS) \
-    $(GMIME_LIBS)
+    $(GMIME_LIBS) \
+    $(SQLITE_LIBS)
 
 test_arena_SOURCES    = test-arena.c $(top_srcdir)/src/mail-arena.c
 test_accounts_SOURCES = test-accounts.c
@@ -33,6 +35,11 @@ test_sidebar_SOURCES = \
     $(top_srcdir)/src/mail-backend.c \
     $(top_srcdir)/src/mail-account.c \
     $(top_srcdir)/src/mail-sidebar.c \
+    $(top_srcdir)/src/mail-store.c \
+    $(top_srcdir)/src/mail-backend-store.c \
+    $(top_srcdir)/src/mail-sync.c \
+    $(top_srcdir)/src/mail-progress-ring.c \
+    $(top_srcdir)/src/mail-refresh-button.c \
     $(top_srcdir)/src/mail-backend-msgraph.c \
     $(top_srcdir)/src/mail-backend-imap.c
 
@@ -71,3 +78,30 @@ test_mime_SOURCES = \
     $(top_srcdir)/src/mail-mime.c
 
 test_mime_LDADD = $(LDADD)
+
+test_store_SOURCES = \
+    test-store.c \
+    $(top_srcdir)/src/mail-arena.c \
+    $(top_srcdir)/src/mail-store.c
+
+test_store_LDADD = $(LDADD)
+
+test_backend_store_SOURCES = \
+    test-backend-store.c \
+    $(top_srcdir)/src/mail-arena.c \
+    $(top_srcdir)/src/mail-store.c \
+    $(top_srcdir)/src/mail-backend.c \
+    $(top_srcdir)/src/mail-backend-store.c
+
+test_backend_store_LDADD = $(LDADD)
+
+test_sync_SOURCES = \
+    test-sync.c \
+    mail-backend-fake.c \
+    mail-backend-fake.h \
+    $(top_srcdir)/src/mail-arena.c \
+    $(top_srcdir)/src/mail-store.c \
+    $(top_srcdir)/src/mail-backend.c \
+    $(top_srcdir)/src/mail-sync.c
+
+test_sync_LDADD = $(LDADD)

@@ -110,6 +110,59 @@ test_load_in_mapped_window (void)
 }
 
 static void
+test_natural_height_does_not_propagate_giant_buffer (void)
+{
+  /* Regression: opening a real RFC822 message (1500+ wrapped lines from
+   * inlined base64 attachments) made the GtkScrolledWindow's child
+   * propagate its 17 kpx natural height upward, producing repeated
+   *   Adwaita-WARNING: AdwOverlaySplitView 0x… exceeds MailWindow
+   *                    height: requested 17828 px, 700 px available
+   * on every message click. Fix: GTK_POLICY_AUTOMATIC unconditionally
+   * + gtk_scrolled_window_set_propagate_natural_{height,width}=FALSE.
+   *
+   * This test seeds a message body big enough to trigger the old path
+   * (≥ 2000 lines), loads it, and asserts the view's natural height
+   * is bounded by the scroller's min size, not the buffer's. */
+  GString *body = g_string_new (NULL);
+  g_string_append (body, "Subject: huge\r\n\r\n");
+  for (int i = 0; i < 2000; i++)
+    g_string_append_printf (body, "line %04d of a long body\r\n", i);
+  FakeMessageSpec msgs[] = {
+    { "huge", "huge", "a@b.c", 1700000000, FALSE, body->str },
+  };
+
+  MailBackend *fake = mail_backend_fake_new ();
+  mail_backend_fake_set_messages (fake, "inbox", msgs, G_N_ELEMENTS (msgs));
+
+  GtkWidget *window = gtk_window_new ();
+  /* Cap the window small so a propagation regression would be glaring. */
+  gtk_window_set_default_size (GTK_WINDOW (window), 800, 600);
+
+  MailMessageView *view = MAIL_MESSAGE_VIEW (mail_message_view_new ());
+  gtk_window_set_child (GTK_WINDOW (window), GTK_WIDGET (view));
+  gtk_window_present (GTK_WINDOW (window));
+  pump_main_loop ();
+
+  mail_message_view_load (view, fake, "huge");
+  pump_main_loop ();
+
+  /* Measure the view's natural vertical size. With the fix it should be
+   * modest (bounded by the scroller's min); without it, it tracks the
+   * buffer's full extent (tens of thousands of pixels). 1500 px is a
+   * comfortable ceiling well above any plausible chrome and well below
+   * the regression's 17 kpx. */
+  int min_h = 0, nat_h = 0;
+  gtk_widget_measure (GTK_WIDGET (view), GTK_ORIENTATION_VERTICAL, -1,
+                      &min_h, &nat_h, NULL, NULL);
+  g_assert_cmpint (nat_h, <, 1500);
+
+  gtk_window_destroy (GTK_WINDOW (window));
+  pump_main_loop ();
+  mail_backend_destroy (fake);
+  g_string_free (body, TRUE);
+}
+
+static void
 test_properties_emit_notify (void)
 {
   /* has-plain-part flips on every load completion; show-plain resets
@@ -177,6 +230,8 @@ main (int argc,
 
   g_test_add_func ("/message-view/load-in-mapped-window",
                    test_load_in_mapped_window);
+  g_test_add_func ("/message-view/natural-height-does-not-propagate",
+                   test_natural_height_does_not_propagate_giant_buffer);
   g_test_add_func ("/message-view/properties-emit-notify",
                    test_properties_emit_notify);
   return g_test_run ();
