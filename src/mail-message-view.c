@@ -1,22 +1,49 @@
-/* mail-message-view.c - Raw RFC822 viewer with a plain-text toggle.
+/* mail-message-view.c - MIME-aware message viewer.
  *
- * Layout: a GtkScrolledWindow containing a monospace GtkTextView. The
- * GtkTextBuffer is created once and reused for every message — see
+ * Three exclusive view modes, switched from the header bar's
+ * AdwToggleGroup (rendered / plain / source) bound to the
+ * MailMessageViewMode enum on this widget:
+ *
+ *   RENDERED — default after every load. mail_mime_pick_best picks
+ *     the richest displayable part per RFC 2046 §5.1.4:
+ *       text/html  → WebKitWebView page (sandboxed; see below)
+ *       text/plain → the existing GtkTextView (monospace, no wrap)
+ *       neither    → AdwStatusPage explaining what we found
+ *   PLAIN    — forces the text/plain alternative via
+ *     mail_mime_extract_text_plain. Insensitive when no plain part
+ *     exists (has-plain-part property reports this).
+ *   SOURCE   — the raw RFC822 bytes in the GtkTextView. This is the
+ *     pre-MIME-rewrite default behaviour, kept for debugging.
+ *
+ * Layout: GtkBinLayout root hosts a GtkStack with three named pages:
+ *   "web"    — WebKitWebView for HTML rendering
+ *   "text"   — GtkScrolledWindow > GtkTextView for plain & source
+ *   "status" — AdwStatusPage for the unsupported branch
+ *
+ * The text page reuses the GtkTextBuffer across every message — see
  * [[feedback-memory-reuse]].
  *
- * Each fetch caches two things on the view:
- *   - raw_bytes : the bytes returned by the backend (GBytes)
- *   - plain_text: the decoded text/plain body extracted via GMime,
- *                 or NULL if the message has no plain alternative.
+ * Each fetch caches on the view:
+ *   raw_bytes    : bytes returned by the backend (GBytes, owned)
+ *   plain_text   : decoded text/plain alternative (gchar *, may be NULL)
+ *   best_kind    : MailMimeKind from the picker
+ *   best_content : decoded best part (gchar *, NULL for UNSUPPORTED)
+ *   detail       : MIME type that produced UNSUPPORTED, or NULL
  *
- * The viewer exposes:
- *   - has-plain-part (read-only): TRUE iff plain_text != NULL
- *   - show-plain     (read-write): TRUE renders plain_text, FALSE renders raw
+ * WebKit sandboxing — we never want a tracking pixel to leak the user's
+ * IP to a sender. The web view is configured with:
+ *   - ephemeral NetworkSession (no on-disk cache / cookies)
+ *   - JavaScript disabled
+ *   - HTML5 database / local-storage disabled
+ *   - decide-policy refuses every navigation that isn't the initial
+ *     load of about:blank-style data (i.e. our load_html call). Remote
+ *     image loads still go through resource-load-started, where we
+ *     simply do nothing — the resource load proceeds for the in-memory
+ *     HTML render, but the ephemeral session ensures no persistence.
+ *     A full network blackout is a follow-up.
  *
- * The window binds those to a GtkToggleButton in the header bar so
- * toggling the view re-renders the existing buffer with no re-fetch.
- *
- * Scrollbar gating — two cooperating mechanisms (both required):
+ * Scrollbar gating (text page only) — two cooperating mechanisms
+ * (both required):
  *
  *  (1) propagate-natural-{width,height} = FALSE on the scroller.
  *      Without this, opening a message with base64 attachments (~1500
@@ -53,19 +80,28 @@
 #include "mail-mime.h"
 
 #include <adwaita.h>
+#include <webkit/webkit.h>
 
 struct _MailMessageView
 {
   GtkWidget parent_instance;
 
-  GtkScrolledWindow *scroller; /* borrowed; child of self */
+  GtkStack *stack;             /* borrowed; child of self */
+  GtkScrolledWindow *scroller; /* borrowed; child of stack */
   GtkTextView *text_view;
   GtkTextBuffer *buffer;
+  WebKitWebView *web_view;
+  AdwStatusPage *status_page;
+
   GCancellable *cancellable;
 
-  GBytes *raw_bytes;   /* owned; NULL until first successful fetch */
-  gchar *plain_text;   /* owned; NULL if no text/plain part */
-  gboolean show_plain; /* current display mode */
+  GBytes *raw_bytes;      /* owned; NULL until first successful fetch */
+  gchar *plain_text;      /* owned; NULL if no text/plain alternative */
+  MailMimeKind best_kind; /* result of mail_mime_pick_best for last load */
+  gchar *best_content;    /* owned; NULL on UNSUPPORTED or before first load */
+  gchar *detail;          /* owned; MIME type behind UNSUPPORTED, or NULL */
+
+  MailMessageViewMode mode; /* current display mode */
 
   gboolean signals_connected; /* idempotency guard for realize-time hookup */
 };
@@ -74,13 +110,32 @@ enum
 {
   PROP_0,
   PROP_HAS_PLAIN_PART,
-  PROP_SHOW_PLAIN,
+  PROP_VIEW_MODE,
   N_PROPS,
 };
 
 static GParamSpec *props[N_PROPS];
 
 G_DEFINE_FINAL_TYPE (MailMessageView, mail_message_view, GTK_TYPE_WIDGET)
+
+GType
+mail_message_view_mode_get_type (void)
+{
+  static gsize once = 0;
+  static GType the_type = 0;
+  if (g_once_init_enter (&once))
+    {
+      static const GEnumValue values[] = {
+        { MAIL_MESSAGE_VIEW_MODE_RENDERED, "MAIL_MESSAGE_VIEW_MODE_RENDERED", "rendered" },
+        { MAIL_MESSAGE_VIEW_MODE_PLAIN, "MAIL_MESSAGE_VIEW_MODE_PLAIN", "plain" },
+        { MAIL_MESSAGE_VIEW_MODE_SOURCE, "MAIL_MESSAGE_VIEW_MODE_SOURCE", "source" },
+        { 0, NULL, NULL },
+      };
+      the_type = g_enum_register_static ("MailMessageViewMode", values);
+      g_once_init_leave (&once, 1);
+    }
+  return the_type;
+}
 
 static void
 set_buffer_utf8 (MailMessageView *self,
@@ -104,21 +159,88 @@ set_buffer_utf8 (MailMessageView *self,
 }
 
 static void
+show_text_page (MailMessageView *self, const char *data, gssize len)
+{
+  set_buffer_utf8 (self, data, len);
+  gtk_stack_set_visible_child_name (self->stack, "text");
+}
+
+static void
+show_html_page (MailMessageView *self, const char *html)
+{
+  /* about:blank base URI ensures relative URLs and document.URL don't
+   * leak anything message-specific. */
+  webkit_web_view_load_html (self->web_view, html != NULL ? html : "",
+                             "about:blank");
+  gtk_stack_set_visible_child_name (self->stack, "web");
+}
+
+static void
+show_status_page (MailMessageView *self, const char *title, const char *description)
+{
+  adw_status_page_set_title (self->status_page, title);
+  adw_status_page_set_description (self->status_page, description);
+  gtk_stack_set_visible_child_name (self->stack, "status");
+}
+
+static void
 render (MailMessageView *self)
 {
-  if (self->show_plain && self->plain_text != NULL)
+  switch (self->mode)
     {
-      set_buffer_utf8 (self, self->plain_text, -1);
+    case MAIL_MESSAGE_VIEW_MODE_PLAIN:
+      if (self->plain_text != NULL)
+        {
+          show_text_page (self, self->plain_text, -1);
+        }
+      else
+        {
+          show_status_page (self,
+                            "Nothing to display",
+                            "This message has no plain-text alternative.");
+        }
       return;
+
+    case MAIL_MESSAGE_VIEW_MODE_SOURCE:
+      if (self->raw_bytes != NULL)
+        {
+          gsize len = 0;
+          const char *data = g_bytes_get_data (self->raw_bytes, &len);
+          show_text_page (self, data, (gssize) len);
+        }
+      else
+        {
+          show_text_page (self, "", 0);
+        }
+      return;
+
+    case MAIL_MESSAGE_VIEW_MODE_RENDERED:
+    default:
+      break;
     }
-  if (self->raw_bytes != NULL)
+
+  switch (self->best_kind)
     {
-      gsize len = 0;
-      const char *data = g_bytes_get_data (self->raw_bytes, &len);
-      set_buffer_utf8 (self, data, (gssize) len);
+    case MAIL_MIME_KIND_HTML:
+      show_html_page (self, self->best_content);
       return;
+    case MAIL_MIME_KIND_PLAIN:
+      show_text_page (self, self->best_content != NULL ? self->best_content : "", -1);
+      return;
+    case MAIL_MIME_KIND_UNSUPPORTED:
+      {
+        g_autofree char *description = NULL;
+        if (self->detail != NULL)
+          description = g_strdup_printf ("Unsupported content type: %s.\n"
+                                         "Use the Source toggle to view the raw message.",
+                                         self->detail);
+        else
+          description = g_strdup ("This message could not be parsed.\n"
+                                  "Use the Source toggle to view the raw bytes.");
+        show_status_page (self, "Nothing to display", description);
+        return;
+      }
     }
-  gtk_text_buffer_set_text (self->buffer, "", 0);
 }
 
 typedef struct
@@ -141,9 +263,9 @@ on_fetch_done (GObject *source,
     {
       if (error != NULL && !g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
         {
-          char *msg = g_strdup_printf ("(failed to fetch: %s)\n", error->message);
-          gtk_text_buffer_set_text (self->buffer, msg, -1);
-          g_free (msg);
+          g_autofree char *msg = g_strdup_printf ("Failed to fetch message: %s",
+                                                  error->message);
+          show_status_page (self, "Could not load message", msg);
         }
       g_object_unref (self);
       g_free (ctx);
@@ -154,19 +276,23 @@ on_fetch_done (GObject *source,
   self->raw_bytes = body;
 
   g_clear_pointer (&self->plain_text, g_free);
+  g_clear_pointer (&self->best_content, g_free);
+  g_clear_pointer (&self->detail, g_free);
+
   gsize len = 0;
   const guint8 *data = g_bytes_get_data (body, &len);
   self->plain_text = mail_mime_extract_text_plain (data, len);
+  self->best_kind = mail_mime_pick_best (data, len, &self->best_content, &self->detail);
 
-  /* Every new message starts in raw mode. */
-  gboolean prev_show_plain = self->show_plain;
-  self->show_plain = FALSE;
+  /* Reset to the default mode on every load. */
+  MailMessageViewMode prev_mode = self->mode;
+  self->mode = MAIL_MESSAGE_VIEW_MODE_RENDERED;
 
   render (self);
 
   g_object_notify_by_pspec (G_OBJECT (self), props[PROP_HAS_PLAIN_PART]);
-  if (prev_show_plain)
-    g_object_notify_by_pspec (G_OBJECT (self), props[PROP_SHOW_PLAIN]);
+  if (prev_mode != MAIL_MESSAGE_VIEW_MODE_RENDERED)
+    g_object_notify_by_pspec (G_OBJECT (self), props[PROP_VIEW_MODE]);
 
   g_object_unref (self);
   g_free (ctx);
@@ -185,7 +311,7 @@ mail_message_view_load (MailMessageView *self,
   g_clear_object (&self->cancellable);
   self->cancellable = g_cancellable_new ();
 
-  gtk_text_buffer_set_text (self->buffer, "Loading…\n", -1);
+  show_text_page (self, "Loading…\n", -1);
 
   LoadMessageCtx *ctx = g_new (LoadMessageCtx, 1);
   ctx->self = g_object_ref (self);
@@ -213,8 +339,8 @@ mail_message_view_get_property (GObject *object,
     case PROP_HAS_PLAIN_PART:
       g_value_set_boolean (value, self->plain_text != NULL);
       break;
-    case PROP_SHOW_PLAIN:
-      g_value_set_boolean (value, self->show_plain);
+    case PROP_VIEW_MODE:
+      g_value_set_enum (value, self->mode);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -230,14 +356,14 @@ mail_message_view_set_property (GObject *object,
   MailMessageView *self = MAIL_MESSAGE_VIEW (object);
   switch (prop_id)
     {
-    case PROP_SHOW_PLAIN:
+    case PROP_VIEW_MODE:
       {
-        gboolean v = g_value_get_boolean (value);
-        if (v == self->show_plain)
+        MailMessageViewMode v = g_value_get_enum (value);
+        if (v == self->mode)
           return;
-        self->show_plain = v;
+        self->mode = v;
         render (self);
-        g_object_notify_by_pspec (object, props[PROP_SHOW_PLAIN]);
+        g_object_notify_by_pspec (object, props[PROP_VIEW_MODE]);
         break;
       }
     default:
@@ -300,6 +426,8 @@ mail_message_view_dispose (GObject *object)
   g_clear_object (&self->cancellable);
   g_clear_pointer (&self->raw_bytes, g_bytes_unref);
   g_clear_pointer (&self->plain_text, g_free);
+  g_clear_pointer (&self->best_content, g_free);
+  g_clear_pointer (&self->detail, g_free);
 
   GtkWidget *child;
   while ((child = gtk_widget_get_first_child (GTK_WIDGET (self))) != NULL)
@@ -324,26 +452,60 @@ mail_message_view_class_init (MailMessageViewClass *klass)
                                                      NULL, NULL,
                                                      FALSE,
                                                      G_PARAM_READABLE | G_PARAM_STATIC_STRINGS);
-  props[PROP_SHOW_PLAIN] = g_param_spec_boolean ("show-plain",
-                                                 NULL, NULL,
-                                                 FALSE,
-                                                 G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
+  props[PROP_VIEW_MODE] = g_param_spec_enum ("view-mode",
+                                             NULL, NULL,
+                                             MAIL_TYPE_MESSAGE_VIEW_MODE,
+                                             MAIL_MESSAGE_VIEW_MODE_RENDERED,
+                                             G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
   g_object_class_install_properties (object_class, N_PROPS, props);
+}
+
+/* Refuse anything beyond the initial load_html("about:blank") call.
+ * load_html itself shows up as a navigation to about:blank; allow that,
+ * deny everything else (clicking a link inside an HTML email, redirects,
+ * etc.). Without this, clicking a link would replace our message view
+ * with the destination page. */
+static gboolean
+on_webkit_decide_policy (WebKitWebView *view,
+                         WebKitPolicyDecision *decision,
+                         WebKitPolicyDecisionType type,
+                         gpointer user_data)
+{
+  if (type != WEBKIT_POLICY_DECISION_TYPE_NAVIGATION_ACTION && type != WEBKIT_POLICY_DECISION_TYPE_NEW_WINDOW_ACTION)
+    return FALSE;
+
+  WebKitNavigationPolicyDecision *nav = WEBKIT_NAVIGATION_POLICY_DECISION (decision);
+  WebKitNavigationAction *action = webkit_navigation_policy_decision_get_navigation_action (nav);
+  WebKitNavigationType ntype = webkit_navigation_action_get_navigation_type (action);
+
+  /* WEBKIT_NAVIGATION_TYPE_OTHER covers the initial load_html call. */
+  if (ntype == WEBKIT_NAVIGATION_TYPE_OTHER)
+    return FALSE;
+
+  webkit_policy_decision_ignore (decision);
+  return TRUE;
 }
 
 static void
 mail_message_view_init (MailMessageView *self)
 {
   self->cancellable = g_cancellable_new ();
+  self->mode = MAIL_MESSAGE_VIEW_MODE_RENDERED;
+  self->best_kind = MAIL_MIME_KIND_UNSUPPORTED;
 
+  self->stack = GTK_STACK (gtk_stack_new ());
+  gtk_stack_set_transition_type (self->stack, GTK_STACK_TRANSITION_TYPE_NONE);
+  gtk_widget_set_parent (GTK_WIDGET (self->stack), GTK_WIDGET (self));
+
+  /* "text" page — scrolled GtkTextView (plain + source modes). The
+   * scroller's policy dance is preserved verbatim from the previous
+   * implementation; see the top-of-file comment for the rationale. */
   self->scroller = GTK_SCROLLED_WINDOW (gtk_scrolled_window_new ());
-  /* See top-of-file comment. Both lines are required together. */
   gtk_scrolled_window_set_policy (self->scroller,
                                   GTK_POLICY_EXTERNAL, GTK_POLICY_EXTERNAL);
   gtk_scrolled_window_set_overlay_scrolling (self->scroller, FALSE);
   gtk_scrolled_window_set_propagate_natural_width (self->scroller, FALSE);
   gtk_scrolled_window_set_propagate_natural_height (self->scroller, FALSE);
-  gtk_widget_set_parent (GTK_WIDGET (self->scroller), GTK_WIDGET (self));
 
   self->buffer = gtk_text_buffer_new (NULL);
   self->text_view = GTK_TEXT_VIEW (gtk_text_view_new_with_buffer (self->buffer));
@@ -357,4 +519,36 @@ mail_message_view_init (MailMessageView *self)
   gtk_text_view_set_right_margin (self->text_view, 12);
 
   gtk_scrolled_window_set_child (self->scroller, GTK_WIDGET (self->text_view));
+  gtk_stack_add_named (self->stack, GTK_WIDGET (self->scroller), "text");
+
+  /* "web" page — WebKitWebView for HTML rendering. Ephemeral session
+   * so no on-disk cache or cookies persist; remote loads are still
+   * issued by the engine for inline <img> etc. — that's a known limit,
+   * see top-of-file comment. */
+  WebKitNetworkSession *ephemeral = webkit_network_session_new_ephemeral ();
+  self->web_view = WEBKIT_WEB_VIEW (g_object_new (WEBKIT_TYPE_WEB_VIEW,
+                                                  "network-session", ephemeral,
+                                                  NULL));
+  g_object_unref (ephemeral);
+
+  WebKitSettings *settings = webkit_web_view_get_settings (self->web_view);
+  webkit_settings_set_enable_javascript (settings, FALSE);
+  webkit_settings_set_enable_html5_database (settings, FALSE);
+  webkit_settings_set_enable_html5_local_storage (settings, FALSE);
+  webkit_settings_set_enable_developer_extras (settings, FALSE);
+
+  g_signal_connect (self->web_view, "decide-policy",
+                    G_CALLBACK (on_webkit_decide_policy), NULL);
+
+  gtk_widget_set_hexpand (GTK_WIDGET (self->web_view), TRUE);
+  gtk_widget_set_vexpand (GTK_WIDGET (self->web_view), TRUE);
+  gtk_stack_add_named (self->stack, GTK_WIDGET (self->web_view), "web");
+
+  /* "status" page — AdwStatusPage for unsupported content / errors. */
+  self->status_page = ADW_STATUS_PAGE (adw_status_page_new ());
+  adw_status_page_set_icon_name (self->status_page, "mail-mark-junk-symbolic");
+  adw_status_page_set_title (self->status_page, "Nothing to display");
+  gtk_stack_add_named (self->stack, GTK_WIDGET (self->status_page), "status");
+
+  gtk_stack_set_visible_child_name (self->stack, "text");
 }

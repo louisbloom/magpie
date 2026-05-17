@@ -22,7 +22,7 @@ struct _MailWindow
   AdwNavigationPage *message_list_page;
   AdwWindowTitle *message_list_title;
   AdwNavigationPage *message_view_page;
-  GtkToggleButton *plain_toggle;
+  AdwToggleGroup *view_mode_group;
 
   /* Added programmatically. */
   MailAccountPage *account_page;
@@ -303,16 +303,61 @@ on_sync_running_notify (GObject *src,
 
 /* --- toggle plumbing --------------------------------------------- */
 
-static void
-on_plain_toggle_active_changed (GObject *object,
-                                GParamSpec *pspec,
-                                gpointer user_data)
+/* MailMessageViewMode ↔ "rendered"|"plain"|"source" string name on the
+ * AdwToggleGroup. Bidirectional binding (the user clicks the toggle,
+ * we hear it; we set view-mode after a load, the toggle highlights). */
+static gboolean
+view_mode_to_name (GBinding *binding,
+                   const GValue *from,
+                   GValue *to,
+                   gpointer user_data)
 {
-  GtkToggleButton *btn = GTK_TOGGLE_BUTTON (object);
-  gboolean active = gtk_toggle_button_get_active (btn);
-  gtk_button_set_icon_name (GTK_BUTTON (btn),
-                            active ? "text-x-generic-symbolic"
-                                   : "view-paged-symbolic");
+  switch (g_value_get_enum (from))
+    {
+    case MAIL_MESSAGE_VIEW_MODE_RENDERED:
+      g_value_set_string (to, "rendered");
+      break;
+    case MAIL_MESSAGE_VIEW_MODE_PLAIN:
+      g_value_set_string (to, "plain");
+      break;
+    case MAIL_MESSAGE_VIEW_MODE_SOURCE:
+      g_value_set_string (to, "source");
+      break;
+    default:
+      g_value_set_string (to, "rendered");
+      break;
+    }
+  return TRUE;
+}
+
+static gboolean
+name_to_view_mode (GBinding *binding,
+                   const GValue *from,
+                   GValue *to,
+                   gpointer user_data)
+{
+  const char *name = g_value_get_string (from);
+  if (g_strcmp0 (name, "plain") == 0)
+    g_value_set_enum (to, MAIL_MESSAGE_VIEW_MODE_PLAIN);
+  else if (g_strcmp0 (name, "source") == 0)
+    g_value_set_enum (to, MAIL_MESSAGE_VIEW_MODE_SOURCE);
+  else
+    g_value_set_enum (to, MAIL_MESSAGE_VIEW_MODE_RENDERED);
+  return TRUE;
+}
+
+/* The Plain toggle is sensitive only when the message has a
+ * text/plain alternative. Tracked via the view's has-plain-part
+ * notify so it updates on every load. */
+static void
+on_has_plain_part_notify (GObject *src, GParamSpec *pspec, gpointer user_data)
+{
+  MailWindow *self = MAIL_WINDOW (user_data);
+  gboolean has_plain = FALSE;
+  g_object_get (src, "has-plain-part", &has_plain, NULL);
+  AdwToggle *plain = adw_toggle_group_get_toggle_by_name (self->view_mode_group, "plain");
+  if (plain != NULL)
+    adw_toggle_set_enabled (plain, has_plain);
 }
 
 /* --- GObject ----------------------------------------------------- */
@@ -352,7 +397,7 @@ mail_window_class_init (MailWindowClass *klass)
   gtk_widget_class_bind_template_child (widget_class, MailWindow, message_list_page);
   gtk_widget_class_bind_template_child (widget_class, MailWindow, message_list_title);
   gtk_widget_class_bind_template_child (widget_class, MailWindow, message_view_page);
-  gtk_widget_class_bind_template_child (widget_class, MailWindow, plain_toggle);
+  gtk_widget_class_bind_template_child (widget_class, MailWindow, view_mode_group);
 }
 
 static void
@@ -364,14 +409,14 @@ mail_window_init (MailWindow *self)
                           self->sidebar_toggle, "active",
                           G_BINDING_BIDIRECTIONAL | G_BINDING_SYNC_CREATE);
 
-  g_object_bind_property (self->message_view, "has-plain-part",
-                          self->plain_toggle, "sensitive",
-                          G_BINDING_SYNC_CREATE);
-  g_object_bind_property (self->message_view, "show-plain",
-                          self->plain_toggle, "active",
-                          G_BINDING_BIDIRECTIONAL | G_BINDING_SYNC_CREATE);
-  g_signal_connect (self->plain_toggle, "notify::active",
-                    G_CALLBACK (on_plain_toggle_active_changed), self);
+  g_object_bind_property_full (self->message_view, "view-mode",
+                               self->view_mode_group, "active-name",
+                               G_BINDING_BIDIRECTIONAL | G_BINDING_SYNC_CREATE,
+                               view_mode_to_name, name_to_view_mode,
+                               NULL, NULL);
+  g_signal_connect (self->message_view, "notify::has-plain-part",
+                    G_CALLBACK (on_has_plain_part_notify), self);
+  on_has_plain_part_notify (G_OBJECT (self->message_view), NULL, self);
 
   /* Add the account page to the nav view so it can be swapped in via
    * adw_navigation_view_replace_with_tags. It is never shown as the

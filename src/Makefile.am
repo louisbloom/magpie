@@ -61,7 +61,8 @@ AM_CPPFLAGS = \
     $(SOUP_CFLAGS) \
     $(JSON_GLIB_CFLAGS) \
     $(GMIME_CFLAGS) \
-    $(SQLITE_CFLAGS)
+    $(SQLITE_CFLAGS) \
+    $(WEBKIT_CFLAGS)
 
 mail_LDADD = \
     $(GTK_LIBS) \
@@ -71,4 +72,5 @@ mail_LDADD = \
     $(JSON_GLIB_LIBS) \
     $(GMIME_LIBS) \
     $(SQLITE_LIBS) \
+    $(WEBKIT_LIBS) \
     $(LIBETPAN_LIBS)

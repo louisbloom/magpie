@@ -50,12 +50,13 @@ CFLAGS="$CFLAGS -Wall -Wextra -Wno-unused-parameter -Wmissing-prototypes"
 
 dnl Required pkg-config packages.
 PKG_CHECK_MODULES([GTK],       [gtk4 >= 4.10])
-PKG_CHECK_MODULES([ADWAITA],   [libadwaita-1 >= 1.5])
+PKG_CHECK_MODULES([ADWAITA],   [libadwaita-1 >= 1.7])
 PKG_CHECK_MODULES([GOA],       [goa-1.0 >= 3.40])
 PKG_CHECK_MODULES([SOUP],      [libsoup-3.0 >= 3.0])
 PKG_CHECK_MODULES([JSON_GLIB], [json-glib-1.0 >= 1.6])
 PKG_CHECK_MODULES([GMIME],     [gmime-3.0 >= 3.2])
 PKG_CHECK_MODULES([SQLITE],    [sqlite3 >= 3.24])
+PKG_CHECK_MODULES([WEBKIT],    [webkitgtk-6.0 >= 2.44])
 
 dnl libetpan has no pkg-config file; probe it via AC_CHECK_LIB.
 AC_CHECK_HEADER([libetpan/libetpan.h], [],

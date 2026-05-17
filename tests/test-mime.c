@@ -1,16 +1,20 @@
 /* tests/test-mime.c - mail-mime extractor regression tests.
  *
- * Each case builds a small RFC822 byte buffer inline (literal string)
- * and asserts what mail_mime_extract_text_plain returns. These are the
- * shapes the message viewer must handle when offering its raw / plain
- * toggle.
+ * Two suites in one binary:
  *
- * Regression context: modern multipart mail (multipart/alternative,
- * quoted-printable, base64, non-UTF-8 charsets) renders as gibberish
- * in the raw view. The viewer relies on this extractor to populate the
- * "plain" alternative; if extraction silently drops content the toggle
- * becomes either invisible (regression A) or shows the wrong text
- * (regression B). Either is a bug; these cases pin both.
+ *  /mime/...      - mail_mime_extract_text_plain: forces the
+ *                   text/plain alternative for the Plain toggle.
+ *  /mime/pick/... - mail_mime_pick_best: drives the default render
+ *                   path, picking the richest displayable part per
+ *                   RFC 2046 §5.1.4 (last recognisable in
+ *                   multipart/alternative wins; HTML naturally beats
+ *                   plain when both are present in the standard order).
+ *
+ * Each case builds a small RFC822 byte buffer inline and asserts the
+ * extractor's output. Regression context: modern multipart mail
+ * (multipart/alternative, quoted-printable, base64, non-UTF-8 charsets)
+ * renders as gibberish in the raw view; the viewer relies on these two
+ * entry points to populate the rendered and plain modes respectively.
  */
 
 #include "../src/mail-mime.h"
@@ -200,6 +204,182 @@ test_garbage (void)
     g_assert_true (g_utf8_validate (out, -1, NULL));
 }
 
+/* --- mail_mime_pick_best ---------------------------------------- */
+
+static void
+test_pick_alternative_html_wins (void)
+{
+  /* Plain first, HTML second — the standard ordering. RFC 2046 §5.1.4
+   * says the last recognisable type is the best representation; HTML
+   * wins here. */
+  static const char raw[] =
+      "From: a@x\r\n"
+      "MIME-Version: 1.0\r\n"
+      "Content-Type: multipart/alternative; boundary=\"B\"\r\n"
+      "\r\n"
+      "--B\r\n"
+      "Content-Type: text/plain; charset=utf-8\r\n"
+      "\r\n"
+      "plain version\r\n"
+      "--B\r\n"
+      "Content-Type: text/html; charset=utf-8\r\n"
+      "\r\n"
+      "<p>HTML version</p>\r\n"
+      "--B--\r\n";
+  g_autofree gchar *content = NULL;
+  g_autofree gchar *detail = NULL;
+  MailMimeKind k = mail_mime_pick_best ((const guint8 *) raw, sizeof raw - 1,
+                                        &content, &detail);
+  g_assert_cmpint (k, ==, MAIL_MIME_KIND_HTML);
+  g_assert_nonnull (content);
+  g_assert_true (strstr (content, "<p>HTML version</p>") != NULL);
+  g_assert_null (detail);
+}
+
+static void
+test_pick_alternative_plain_only (void)
+{
+  static const char raw[] =
+      "From: a@x\r\n"
+      "MIME-Version: 1.0\r\n"
+      "Content-Type: multipart/alternative; boundary=\"B\"\r\n"
+      "\r\n"
+      "--B\r\n"
+      "Content-Type: text/plain; charset=utf-8\r\n"
+      "\r\n"
+      "just the plain body\r\n"
+      "--B--\r\n";
+  g_autofree gchar *content = NULL;
+  g_autofree gchar *detail = NULL;
+  MailMimeKind k = mail_mime_pick_best ((const guint8 *) raw, sizeof raw - 1,
+                                        &content, &detail);
+  g_assert_cmpint (k, ==, MAIL_MIME_KIND_PLAIN);
+  g_assert_nonnull (content);
+  g_assert_true (strstr (content, "just the plain body") != NULL);
+}
+
+static void
+test_pick_top_level_html (void)
+{
+  static const char raw[] =
+      "From: a@x\r\n"
+      "Content-Type: text/html; charset=utf-8\r\n"
+      "\r\n"
+      "<h1>hi</h1>\r\n";
+  g_autofree gchar *content = NULL;
+  g_autofree gchar *detail = NULL;
+  MailMimeKind k = mail_mime_pick_best ((const guint8 *) raw, sizeof raw - 1,
+                                        &content, &detail);
+  g_assert_cmpint (k, ==, MAIL_MIME_KIND_HTML);
+  g_assert_nonnull (content);
+  g_assert_true (strstr (content, "<h1>hi</h1>") != NULL);
+}
+
+static void
+test_pick_top_level_plain (void)
+{
+  static const char raw[] =
+      "From: a@x\r\n"
+      "Content-Type: text/plain; charset=utf-8\r\n"
+      "\r\n"
+      "hi there\r\n";
+  g_autofree gchar *content = NULL;
+  g_autofree gchar *detail = NULL;
+  MailMimeKind k = mail_mime_pick_best ((const guint8 *) raw, sizeof raw - 1,
+                                        &content, &detail);
+  g_assert_cmpint (k, ==, MAIL_MIME_KIND_PLAIN);
+  g_assert_nonnull (content);
+  g_assert_true (strstr (content, "hi there") != NULL);
+}
+
+static void
+test_pick_no_content_type (void)
+{
+  /* RFC 2045 §5.2: absence of Content-Type is "text/plain; us-ascii".
+   * GMime materialises that default, so the picker reports PLAIN. */
+  static const char raw[] =
+      "From: a@x\r\n"
+      "Subject: no content type\r\n"
+      "\r\n"
+      "body of a non-MIME message\r\n";
+  g_autofree gchar *content = NULL;
+  g_autofree gchar *detail = NULL;
+  MailMimeKind k = mail_mime_pick_best ((const guint8 *) raw, sizeof raw - 1,
+                                        &content, &detail);
+  g_assert_cmpint (k, ==, MAIL_MIME_KIND_PLAIN);
+  g_assert_nonnull (content);
+  g_assert_true (strstr (content, "body of a non-MIME message") != NULL);
+}
+
+static void
+test_pick_unsupported_pdf (void)
+{
+  static const char raw[] =
+      "From: a@x\r\n"
+      "Content-Type: application/pdf\r\n"
+      "Content-Transfer-Encoding: base64\r\n"
+      "\r\n"
+      "SGVsbG8K\r\n";
+  g_autofree gchar *content = NULL;
+  g_autofree gchar *detail = NULL;
+  MailMimeKind k = mail_mime_pick_best ((const guint8 *) raw, sizeof raw - 1,
+                                        &content, &detail);
+  g_assert_cmpint (k, ==, MAIL_MIME_KIND_UNSUPPORTED);
+  g_assert_null (content);
+  g_assert_nonnull (detail);
+  g_assert_cmpstr (detail, ==, "application/pdf");
+}
+
+static void
+test_pick_nested_mixed_alternative (void)
+{
+  /* multipart/mixed { multipart/alternative { plain, html },
+   *                   application/pdf attachment } — the picker recurses
+   * into the first child, finds the alternative, and returns its HTML. */
+  static const char raw[] =
+      "From: a@x\r\n"
+      "MIME-Version: 1.0\r\n"
+      "Content-Type: multipart/mixed; boundary=\"A\"\r\n"
+      "\r\n"
+      "--A\r\n"
+      "Content-Type: multipart/alternative; boundary=\"B\"\r\n"
+      "\r\n"
+      "--B\r\n"
+      "Content-Type: text/plain; charset=utf-8\r\n"
+      "\r\n"
+      "plain\r\n"
+      "--B\r\n"
+      "Content-Type: text/html; charset=utf-8\r\n"
+      "\r\n"
+      "<p>HTML body</p>\r\n"
+      "--B--\r\n"
+      "--A\r\n"
+      "Content-Type: application/pdf\r\n"
+      "Content-Disposition: attachment; filename=\"x.pdf\"\r\n"
+      "Content-Transfer-Encoding: base64\r\n"
+      "\r\n"
+      "SGVsbG8K\r\n"
+      "--A--\r\n";
+  g_autofree gchar *content = NULL;
+  g_autofree gchar *detail = NULL;
+  MailMimeKind k = mail_mime_pick_best ((const guint8 *) raw, sizeof raw - 1,
+                                        &content, &detail);
+  g_assert_cmpint (k, ==, MAIL_MIME_KIND_HTML);
+  g_assert_nonnull (content);
+  g_assert_true (strstr (content, "<p>HTML body</p>") != NULL);
+}
+
+static void
+test_pick_empty_input (void)
+{
+  g_autofree gchar *content = NULL;
+  g_autofree gchar *detail = NULL;
+  MailMimeKind k = mail_mime_pick_best (NULL, 0, &content, &detail);
+  g_assert_cmpint (k, ==, MAIL_MIME_KIND_UNSUPPORTED);
+  g_assert_null (content);
+  g_assert_null (detail);
+}
+
 int
 main (int argc,
       char *argv[])
@@ -218,5 +398,18 @@ main (int argc,
   g_test_add_func ("/mime/charset-iso-8859-1", test_charset_iso_8859_1);
   g_test_add_func ("/mime/empty-input", test_empty_input);
   g_test_add_func ("/mime/garbage", test_garbage);
+
+  g_test_add_func ("/mime/pick/alternative-html-wins",
+                   test_pick_alternative_html_wins);
+  g_test_add_func ("/mime/pick/alternative-plain-only",
+                   test_pick_alternative_plain_only);
+  g_test_add_func ("/mime/pick/top-level-html", test_pick_top_level_html);
+  g_test_add_func ("/mime/pick/top-level-plain", test_pick_top_level_plain);
+  g_test_add_func ("/mime/pick/no-content-type", test_pick_no_content_type);
+  g_test_add_func ("/mime/pick/unsupported-pdf", test_pick_unsupported_pdf);
+  g_test_add_func ("/mime/pick/nested-mixed-alternative",
+                   test_pick_nested_mixed_alternative);
+  g_test_add_func ("/mime/pick/empty-input", test_pick_empty_input);
+
   return g_test_run ();
 }

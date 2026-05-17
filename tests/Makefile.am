@@ -13,7 +13,8 @@ AM_CPPFLAGS = \
     $(JSON_GLIB_CFLAGS) \
     $(SOUP_CFLAGS) \
     $(GMIME_CFLAGS) \
-    $(SQLITE_CFLAGS)
+    $(SQLITE_CFLAGS) \
+    $(WEBKIT_CFLAGS)
 
 LDADD = \
     $(GTK_LIBS) \
@@ -22,7 +23,8 @@ LDADD = \
     $(JSON_GLIB_LIBS) \
     $(SOUP_LIBS) \
     $(GMIME_LIBS) \
-    $(SQLITE_LIBS)
+    $(SQLITE_LIBS) \
+    $(WEBKIT_LIBS)
 
 test_arena_SOURCES    = test-arena.c $(top_srcdir)/src/mail-arena.c
 test_accounts_SOURCES = test-accounts.c

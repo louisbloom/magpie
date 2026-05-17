@@ -22,9 +22,10 @@ upstream.
 
 The scope is deliberately narrow at this stage: browse the folders of
 your configured accounts, trigger and watch syncs, and read messages
-(raw RFC822 with an optional decoded text/plain view). Sending, search,
-threading, push notifications, and rich rendering are explicit
-follow-ups, not held-back features.
+(MIME-aware: HTML in WebKit by default, with toggles for the
+text/plain alternative and the raw RFC822 source). Sending, search,
+threading, and push notifications are explicit follow-ups, not
+held-back features.
 
 ## Principles
 
@@ -92,9 +93,13 @@ Early prototype. The current shape:
 - **Right pane.** Three pages routed through `AdwNavigationView`: the
   message list (a virtualizing `GtkListView` over the local store, so
   10k-row folders open instantly and scroll smoothly), the message
-  viewer (pushed on row activation, with a header-bar toggle between
-  raw RFC822 and the decoded text/plain alternative when one is
-  available), and the account page (shown when an account row is
+  viewer (pushed on row activation, with an `AdwToggleGroup` in the
+  header bar exposing three exclusive view modes — _Rendered_ (HTML in
+  a sandboxed `WebKitWebView` or the text/plain alternative, per
+  RFC 2046 §5.1.4), _Plain_ (forced text/plain alternative; insensitive
+  when none exists), and _Source_ (raw RFC822). Unsupported content
+  types surface an `AdwStatusPage` placeholder instead of dumping
+  binary), and the account page (shown when an account row is
   selected, or auto-switched-to when a sync starts on the current
   account).
 - **Account page.** `AdwStatusPage`-based body with a "Sync now" button
@@ -129,7 +134,7 @@ Early prototype. The current shape:
 sudo dnf install gnome-online-accounts-devel libsoup3-devel \
                  json-glib-devel libetpan-devel libsecret-devel \
                  gtk4-devel libadwaita-devel gmime30-devel \
-                 sqlite-devel
+                 sqlite-devel webkitgtk6.0-devel
 
 ./autogen.sh
 mkdir -p build && cd build
