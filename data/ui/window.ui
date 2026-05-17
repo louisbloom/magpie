@@ -57,6 +57,15 @@
                                 <property name="tooltip-text" translatable="yes">Toggle sidebar</property>
                               </object>
                             </child>
+                            <!-- Two-line header: folder name on top, account
+                                 identity (email) below. Updated by mail-window
+                                 on every folder activation. -->
+                            <property name="title-widget">
+                              <object class="AdwWindowTitle" id="message_list_title">
+                                <property name="title">Select a folder</property>
+                                <property name="subtitle"/>
+                              </object>
+                            </property>
                           </object>
                         </child>
                         <property name="content">

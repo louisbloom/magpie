@@ -20,6 +20,7 @@ struct _MailWindow
   MailMessageList *message_list;
   MailMessageView *message_view;
   AdwNavigationPage *message_list_page;
+  AdwWindowTitle *message_list_title;
   AdwNavigationPage *message_view_page;
   GtkToggleButton *plain_toggle;
 
@@ -79,12 +80,19 @@ on_folder_selected (MailSidebar *sidebar,
   if (backend == NULL || folder_id == NULL)
     return;
   self->current_account = acct;
-  /* Reflect the selected folder in the content pane's header title.
-   * Falls back to the app name on the (unreachable here) NULL case. */
-  adw_navigation_page_set_title (self->message_list_page,
-                                 (folder_display_name != NULL && folder_display_name[0] != '\0')
-                                     ? folder_display_name
-                                     : "Mail");
+  /* Reflect the selected folder + account in the content header. The
+   * AdwWindowTitle gives us a two-line layout: folder on top,
+   * account identity (email) below. The AdwNavigationPage::title is
+   * kept in sync as the single-line folder name — that's what gets
+   * read for accessibility and the back-button label when the split
+   * view collapses to a navigation stack. */
+  const char *folder_title = (folder_display_name != NULL && folder_display_name[0] != '\0')
+                                 ? folder_display_name
+                                 : "Mail";
+  const char *account_subtitle = (acct != NULL && acct->identity != NULL) ? acct->identity : "";
+  adw_navigation_page_set_title (self->message_list_page, folder_title);
+  adw_window_title_set_title (self->message_list_title, folder_title);
+  adw_window_title_set_subtitle (self->message_list_title, account_subtitle);
   recompute_nav_stack (self);
   /* Only load if we're showing the list — otherwise the load would
    * fire into the message-list widget while the user can't see it. */
@@ -240,6 +248,7 @@ mail_window_class_init (MailWindowClass *klass)
   gtk_widget_class_bind_template_child (widget_class, MailWindow, message_list);
   gtk_widget_class_bind_template_child (widget_class, MailWindow, message_view);
   gtk_widget_class_bind_template_child (widget_class, MailWindow, message_list_page);
+  gtk_widget_class_bind_template_child (widget_class, MailWindow, message_list_title);
   gtk_widget_class_bind_template_child (widget_class, MailWindow, message_view_page);
   gtk_widget_class_bind_template_child (widget_class, MailWindow, plain_toggle);
 }
