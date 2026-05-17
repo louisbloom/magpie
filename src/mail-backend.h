@@ -36,6 +36,17 @@ typedef struct
   const char *from;
   gint64 received_unix;
   gboolean unread;
+  /* Stable cross-folder identity for the message body. Used by the
+   * sync engine to dedup: messages with the same content_key share a
+   * single fetched body (hardlinked across folders in the local
+   * Maildir tree). Allocated from the same arena as the other
+   * fields; lifetime contract unchanged. NULL if the backend has no
+   * such identity (the sync engine then treats the message as
+   * unique and always fetches it).
+   *
+   * IMAP populates from ENVELOPE's Message-ID (RFC 5322 §3.6.4).
+   * MS Graph populates from internetMessageId. */
+  const char *content_key;
 } MailMessageMeta;
 
 struct _MailBackendVTable

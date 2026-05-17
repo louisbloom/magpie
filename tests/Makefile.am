@@ -1,6 +1,6 @@
 # tests/Makefile.am - Unit tests for GNOME Mail.
 
-UNIT_TESTS = test-arena test-accounts test-sidebar test-backend-contract test-message-list test-message-view test-mime test-store test-backend-store test-sync test-eta test-account-page
+UNIT_TESTS = test-arena test-accounts test-sidebar test-backend-contract test-message-list test-message-view test-mime test-imap-id test-store test-backend-store test-sync test-eta test-account-page
 
 check_PROGRAMS = $(UNIT_TESTS)
 TESTS          = $(UNIT_TESTS)
@@ -53,7 +53,9 @@ test_sidebar_SOURCES = \
     $(top_srcdir)/src/mail-sync.c \
     $(top_srcdir)/src/mail-progress-ring.c \
     $(top_srcdir)/src/mail-backend-msgraph.c \
-    $(top_srcdir)/src/mail-backend-imap.c
+    $(top_srcdir)/src/mail-backend-imap.c \
+    $(top_srcdir)/src/mail-imap-id.c \
+    $(top_srcdir)/src/mail-mime.c
 
 test_sidebar_LDADD = $(LDADD) $(LIBETPAN_LIBS)
 
@@ -90,6 +92,12 @@ test_mime_SOURCES = \
     $(top_srcdir)/src/mail-mime.c
 
 test_mime_LDADD = $(LDADD)
+
+test_imap_id_SOURCES = \
+    test-imap-id.c \
+    $(top_srcdir)/src/mail-imap-id.c
+
+test_imap_id_LDADD = $(LDADD)
 
 test_store_SOURCES = \
     test-store.c \

@@ -32,7 +32,8 @@ typedef struct
   const char *from;
   gint64 received_unix;
   gboolean unread;
-  const char *raw_rfc822; /* body returned by fetch_message_raw */
+  const char *raw_rfc822;  /* body returned by fetch_message_raw */
+  const char *content_key; /* may be NULL; surfaces on MailMessageMeta.content_key */
 } FakeMessageSpec;
 
 /* Construct an empty fake backend. */

@@ -12,6 +12,13 @@
 
 G_BEGIN_DECLS
 
+/* Idempotent process-wide GMime initialiser. Both entry points below
+ * call this internally; anything else in the codebase that drives
+ * GMime APIs directly (e.g. the IMAP backend's RFC 2047 decoder)
+ * must invoke it before its first GMime call, or the library will
+ * crash dereferencing uninitialised parser-options state. */
+void mail_mime_ensure_init (void);
+
 /* Kind of body returned by mail_mime_pick_best. */
 typedef enum
 {

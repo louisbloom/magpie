@@ -18,6 +18,8 @@ mail_SOURCES = \
     mail-message-view.h \
     mail-mime.c \
     mail-mime.h \
+    mail-imap-id.c \
+    mail-imap-id.h \
     mail-account.c \
     mail-account.h \
     mail-store.c \

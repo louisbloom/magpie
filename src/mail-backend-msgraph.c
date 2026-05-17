@@ -354,6 +354,9 @@ parse_messages_page (MailBackendMSGraph *self,
       m->subject = json_object_has_member (o, "subject") ? mail_arena_strdup (&self->base.fetch_arena, json_object_get_string_member (o, "subject")) : NULL;
       m->from = format_from (o, &self->base.fetch_arena);
       m->unread = json_object_has_member (o, "isRead") ? !json_object_get_boolean_member (o, "isRead") : FALSE;
+      m->content_key = json_object_has_member (o, "internetMessageId")
+                           ? mail_arena_strdup (&self->base.fetch_arena, json_object_get_string_member (o, "internetMessageId"))
+                           : NULL;
       m->received_unix = 0;
       if (json_object_has_member (o, "receivedDateTime"))
         {
@@ -487,7 +490,7 @@ mb_msgraph_list_messages_async (MailBackend *base,
   ListMessagesJob *job = g_new0 (ListMessagesJob, 1);
   /* Always request a full Graph page; the caller's cap (top_n) is
    * enforced by the pagination loop in on_messages_response. */
-  job->url = g_strdup_printf (MSGRAPH_BASE "/me/mailFolders/%s/messages?$top=%d&$orderby=receivedDateTime%%20desc&$select=id,subject,from,receivedDateTime,isRead",
+  job->url = g_strdup_printf (MSGRAPH_BASE "/me/mailFolders/%s/messages?$top=%d&$orderby=receivedDateTime%%20desc&$select=id,subject,from,receivedDateTime,isRead,internetMessageId",
                               escaped, MSGRAPH_MESSAGES_PAGE_SIZE);
   job->messages = g_ptr_array_new ();
   job->top_n = top_n;

@@ -19,7 +19,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#define MAIL_STORE_SCHEMA_VERSION 1
+#define MAIL_STORE_SCHEMA_VERSION 2
 
 struct _MailStore
 {
@@ -42,6 +42,7 @@ struct _MailStore
   sqlite3_stmt *st_message_list;
   sqlite3_stmt *st_message_remote_ids;
   sqlite3_stmt *st_message_location;
+  sqlite3_stmt *st_message_location_by_content_key;
   sqlite3_stmt *st_message_delete;
 
   /* Scratch buffer used by upsert_folder to hand back a borrowed
@@ -214,7 +215,27 @@ ensure_schema (MailStore *self,
   if (!exec_sql (self->db, "PRAGMA journal_mode = WAL;", error))
     return FALSE;
 
-  const char *ddl =
+  /* Probe user_version first. 0 = brand new; 1 = pre-content_key
+   * store that needs an ALTER TABLE; 2 = current version, no schema
+   * work needed below. */
+  sqlite3_stmt *probe = NULL;
+  if (sqlite3_prepare_v2 (self->db, "PRAGMA user_version;", -1, &probe, NULL) != SQLITE_OK)
+    {
+      set_sqlite_error (error, self->db, "prepare user_version probe");
+      return FALSE;
+    }
+  int existing_version = 0;
+  if (sqlite3_step (probe) == SQLITE_ROW)
+    existing_version = sqlite3_column_int (probe, 0);
+  sqlite3_finalize (probe);
+
+  if (existing_version == MAIL_STORE_SCHEMA_VERSION)
+    return TRUE;
+
+  /* Base tables — content_key is part of the messages schema for
+   * fresh stores. For an existing v1 store the CREATE TABLE IF NOT
+   * EXISTS is a no-op, and we'll add the column via ALTER below. */
+  const char *base_ddl =
       "CREATE TABLE IF NOT EXISTS folders ("
       "  stable_id        TEXT PRIMARY KEY,"
       "  remote_id        TEXT NOT NULL UNIQUE,"
@@ -233,7 +254,8 @@ ensure_schema (MailStore *self,
       "  from_addr        TEXT,"
       "  received_unix    INTEGER NOT NULL DEFAULT 0,"
       "  unread           INTEGER NOT NULL DEFAULT 0,"
-      "  flags            TEXT"
+      "  flags            TEXT,"
+      "  content_key      TEXT"
       ");"
       "CREATE INDEX IF NOT EXISTS messages_folder_received"
       "  ON messages (folder_stable_id, received_unix DESC);"
@@ -244,7 +266,23 @@ ensure_schema (MailStore *self,
       "  uidnext          INTEGER,"
       "  last_synced_unix INTEGER"
       ");";
-  if (!exec_sql (self->db, ddl, error))
+  if (!exec_sql (self->db, base_ddl, error))
+    return FALSE;
+
+  if (existing_version == 1)
+    {
+      /* v1 store: messages table exists without content_key. */
+      if (!exec_sql (self->db, "ALTER TABLE messages ADD COLUMN content_key TEXT;", error))
+        return FALSE;
+    }
+
+  /* content_key index, created here (after the column definitely
+   * exists) so the path is identical for fresh stores (v=0) and
+   * migrated stores (v=1). */
+  if (!exec_sql (self->db,
+                 "CREATE INDEX IF NOT EXISTS messages_content_key"
+                 "  ON messages (content_key) WHERE content_key IS NOT NULL;",
+                 error))
     return FALSE;
 
   char *pragma = g_strdup_printf ("PRAGMA user_version = %d;",
@@ -285,8 +323,8 @@ prepare_statements (MailStore *self,
       "DELETE FROM folders WHERE remote_id = ?;" },
     { &self->st_message_upsert,
       "INSERT INTO messages"
-      " (stable_id, folder_stable_id, remote_id, filename, subject, from_addr, received_unix, unread, flags)"
-      " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+      " (stable_id, folder_stable_id, remote_id, filename, subject, from_addr, received_unix, unread, flags, content_key)"
+      " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
       " ON CONFLICT(stable_id) DO UPDATE SET"
       "   folder_stable_id = excluded.folder_stable_id,"
       "   filename = excluded.filename,"
@@ -294,7 +332,8 @@ prepare_statements (MailStore *self,
       "   from_addr = excluded.from_addr,"
       "   received_unix = excluded.received_unix,"
       "   unread = excluded.unread,"
-      "   flags = excluded.flags;" },
+      "   flags = excluded.flags,"
+      "   content_key = COALESCE(excluded.content_key, content_key);" },
     { &self->st_message_list,
       "SELECT m.remote_id, m.subject, m.from_addr, m.received_unix, m.unread"
       " FROM messages m"
@@ -312,6 +351,12 @@ prepare_statements (MailStore *self,
       " FROM messages m"
       " JOIN folders f ON f.stable_id = m.folder_stable_id"
       " WHERE m.remote_id = ?;" },
+    { &self->st_message_location_by_content_key,
+      "SELECT f.dir_name, m.filename"
+      " FROM messages m"
+      " JOIN folders f ON f.stable_id = m.folder_stable_id"
+      " WHERE m.content_key = ?"
+      " LIMIT 1;" },
     { &self->st_message_delete,
       "SELECT f.dir_name, m.filename FROM messages m"
       " JOIN folders f ON f.stable_id = m.folder_stable_id"
@@ -390,6 +435,7 @@ mail_store_close (MailStore *self)
     &self->st_message_list,
     &self->st_message_remote_ids,
     &self->st_message_location,
+    &self->st_message_location_by_content_key,
     &self->st_message_delete,
   };
   for (gsize i = 0; i < G_N_ELEMENTS (all); i++)
@@ -640,6 +686,7 @@ gboolean
 mail_store_upsert_message (MailStore *self,
                            const char *folder_remote_id,
                            const char *remote_id,
+                           const char *content_key,
                            const char *filename,
                            const char *subject,
                            const char *from_addr,
@@ -676,12 +723,45 @@ mail_store_upsert_message (MailStore *self,
     sqlite3_bind_text (st, 9, flags, -1, SQLITE_TRANSIENT);
   else
     sqlite3_bind_null (st, 9);
+  if (content_key != NULL)
+    sqlite3_bind_text (st, 10, content_key, -1, SQLITE_TRANSIENT);
+  else
+    sqlite3_bind_null (st, 10);
   if (sqlite3_step (st) != SQLITE_DONE)
     {
       set_sqlite_error (error, self->db, "message upsert");
       return FALSE;
     }
   return TRUE;
+}
+
+gboolean
+mail_store_locate_body_by_content_key (MailStore *self,
+                                       const char *content_key,
+                                       MailArena *arena,
+                                       const char **out_dir_name,
+                                       const char **out_filename,
+                                       GError **error)
+{
+  g_return_val_if_fail (self != NULL && arena != NULL, FALSE);
+  if (content_key == NULL || content_key[0] == '\0')
+    return FALSE;
+
+  sqlite3_stmt *st = self->st_message_location_by_content_key;
+  sqlite3_reset (st);
+  sqlite3_bind_text (st, 1, content_key, -1, SQLITE_TRANSIENT);
+  int rc = sqlite3_step (st);
+  if (rc == SQLITE_ROW)
+    {
+      if (out_dir_name != NULL)
+        *out_dir_name = mail_arena_strdup (arena, (const char *) sqlite3_column_text (st, 0));
+      if (out_filename != NULL)
+        *out_filename = mail_arena_strdup (arena, (const char *) sqlite3_column_text (st, 1));
+      return TRUE;
+    }
+  if (rc != SQLITE_DONE)
+    set_sqlite_error (error, self->db, "message locate by content_key");
+  return FALSE;
 }
 
 GPtrArray *
@@ -900,4 +980,45 @@ mail_store_read_raw (MailStore *self,
   if (!g_file_get_contents (path, &contents, &len, error))
     return NULL;
   return g_bytes_new_take (contents, len);
+}
+
+gboolean
+mail_store_link_raw (MailStore *self,
+                     const char *source_dir,
+                     const char *source_filename,
+                     const char *target_dir,
+                     gboolean seen,
+                     char **out_filename,
+                     GError **error)
+{
+  g_return_val_if_fail (self != NULL, FALSE);
+  g_return_val_if_fail (source_dir != NULL && source_filename != NULL, FALSE);
+  g_return_val_if_fail (target_dir != NULL, FALSE);
+
+  g_autofree char *src = g_build_filename (self->root, source_dir, "cur", source_filename, NULL);
+  g_autofree char *name = maildir_filename (self, seen);
+  g_autofree char *dst = g_build_filename (self->root, target_dir, "cur", name, NULL);
+
+  if (link (src, dst) == 0)
+    {
+      if (out_filename != NULL)
+        *out_filename = g_steal_pointer (&name);
+      return TRUE;
+    }
+
+  /* link() can fail for cross-FS (EXDEV) or if the source is missing
+   * (ENOENT). For EXDEV we fall back to a byte copy so a Maildir
+   * spanning two filesystems still works. Anything else is fatal. */
+  int saved_errno = errno;
+  if (saved_errno != EXDEV)
+    {
+      g_set_error (error, G_IO_ERROR, g_io_error_from_errno (saved_errno),
+                   "link %s -> %s: %s", src, dst, g_strerror (saved_errno));
+      return FALSE;
+    }
+
+  g_autoptr (GBytes) bytes = mail_store_read_raw (self, source_dir, source_filename, error);
+  if (bytes == NULL)
+    return FALSE;
+  return mail_store_write_raw (self, target_dir, bytes, seen, out_filename, error);
 }

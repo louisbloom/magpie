@@ -29,6 +29,7 @@ typedef struct
   gint64 received_unix;
   gboolean unread;
   char *raw_rfc822;
+  char *content_key;
 } FakeMessageStored;
 
 typedef struct
@@ -69,6 +70,7 @@ fake_message_clear (gpointer p)
   g_free (m->subject);
   g_free (m->from);
   g_free (m->raw_rfc822);
+  g_free (m->content_key);
 }
 
 static void
@@ -232,6 +234,9 @@ mb_fake_list_messages_async (MailBackend *base,
           dst->from = mail_arena_strdup (&self->base.fetch_arena, src->from);
           dst->received_unix = src->received_unix;
           dst->unread = src->unread;
+          dst->content_key = src->content_key != NULL
+                                 ? mail_arena_strdup (&self->base.fetch_arena, src->content_key)
+                                 : NULL;
           g_ptr_array_add (out, dst);
         }
     }
@@ -409,6 +414,7 @@ mail_backend_fake_set_messages (MailBackend *backend,
       row.received_unix = msgs[i].received_unix;
       row.unread = msgs[i].unread;
       row.raw_rfc822 = msgs[i].raw_rfc822 != NULL ? g_strdup (msgs[i].raw_rfc822) : NULL;
+      row.content_key = msgs[i].content_key != NULL ? g_strdup (msgs[i].content_key) : NULL;
       g_array_append_val (fm->messages, row);
     }
 }

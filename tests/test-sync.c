@@ -10,6 +10,7 @@
 #include <glib.h>
 #include <glib/gstdio.h>
 #include <string.h>
+#include <sys/stat.h>
 
 static void
 pump (void)
@@ -384,6 +385,146 @@ test_cancel_sets_terminal_status (void)
   rm_rf (root);
 }
 
+/* Walk the messages table directly to confirm content_key was
+ * persisted; the public API only exposes locate-by-content-key,
+ * which is what production code uses. We piggyback on
+ * mail_store_locate_body_by_content_key here. */
+static void
+assert_inodes_equal (const char *root,
+                     const char *dir_a,
+                     const char *file_a,
+                     const char *dir_b,
+                     const char *file_b)
+{
+  g_autofree char *pa = g_build_filename (root, dir_a, "cur", file_a, NULL);
+  g_autofree char *pb = g_build_filename (root, dir_b, "cur", file_b, NULL);
+  struct stat sa, sb;
+  g_assert_cmpint (stat (pa, &sa), ==, 0);
+  g_assert_cmpint (stat (pb, &sb), ==, 0);
+  g_assert_cmpint (sa.st_ino, ==, sb.st_ino);
+}
+
+static void
+test_dedup_by_content_key (void)
+{
+  /* Two folders ("INBOX" and "All Mail") each list the same Gmail
+   * message — same content_key, different per-folder remote_ids. The
+   * sync engine must:
+   *   - Fetch the body once (fetch_raw_calls == 1).
+   *   - Upsert two message rows (one per folder).
+   *   - Hardlink the bodies so both Maildir entries share an inode. */
+  g_autoptr (GError) error = NULL;
+  g_autofree char *root = g_dir_make_tmp ("mail-sync-dedup-XXXXXX", &error);
+  g_assert_no_error (error);
+  MailStore *local = mail_store_open (root, "u@example.com", &error);
+  g_assert_no_error (error);
+
+  MailBackend *remote = mail_backend_fake_new ();
+  FakeFolderSpec folders[] = {
+    { "f-inbox", "Inbox", NULL, 0, 1 },
+    { "f-all", "All Mail", NULL, 0, 1 },
+  };
+  FakeMessageSpec inbox[] = {
+    { "inbox-uid-1", "Greetings", "alice@example.com",
+      1700000000, FALSE, "Shared body bytes", "<gmail-mid-42@example.com>" },
+  };
+  FakeMessageSpec all_mail[] = {
+    { "all-uid-7", "Greetings", "alice@example.com",
+      1700000000, FALSE, "Shared body bytes", "<gmail-mid-42@example.com>" },
+  };
+  mail_backend_fake_set_folders (remote, folders, G_N_ELEMENTS (folders));
+  mail_backend_fake_set_messages (remote, "f-inbox", inbox, G_N_ELEMENTS (inbox));
+  mail_backend_fake_set_messages (remote, "f-all", all_mail, G_N_ELEMENTS (all_mail));
+
+  MailSync *sync = mail_sync_new ();
+  run_to_completion (sync, remote, local, NULL);
+
+  /* Only one network fetch happened. */
+  g_assert_cmpuint (mail_backend_fake_fetch_raw_calls (remote), ==, 1);
+
+  /* Both folders have their message row. */
+  GHashTable *ibo = mail_store_message_remote_ids (local, "f-inbox", &error);
+  g_assert_cmpuint (g_hash_table_size (ibo), ==, 1);
+  g_assert_true (g_hash_table_contains (ibo, "inbox-uid-1"));
+  g_hash_table_unref (ibo);
+  GHashTable *aml = mail_store_message_remote_ids (local, "f-all", &error);
+  g_assert_cmpuint (g_hash_table_size (aml), ==, 1);
+  g_assert_true (g_hash_table_contains (aml, "all-uid-7"));
+  g_hash_table_unref (aml);
+
+  /* Bodies share an inode (hardlink). */
+  MailArena tmp;
+  mail_arena_init (&tmp, 256);
+  const char *dir_a = NULL, *file_a = NULL;
+  const char *dir_b = NULL, *file_b = NULL;
+  g_assert_true (mail_store_message_location (local, "inbox-uid-1", &tmp,
+                                              &dir_a, &file_a, &error));
+  g_assert_true (mail_store_message_location (local, "all-uid-7", &tmp,
+                                              &dir_b, &file_b, &error));
+  assert_inodes_equal (root, dir_a, file_a, dir_b, file_b);
+  mail_arena_destroy (&tmp);
+
+  g_object_unref (sync);
+  mail_backend_destroy (remote);
+  mail_store_close (local);
+  rm_rf (root);
+}
+
+static void
+test_dedup_across_passes (void)
+{
+  /* On a fresh store: pass 1 syncs INBOX with one message. Pass 2
+   * adds the same message (same content_key) under "All Mail". The
+   * second pass must not fetch the body again — it should locate the
+   * existing one by content_key and hardlink it. */
+  g_autoptr (GError) error = NULL;
+  g_autofree char *root = g_dir_make_tmp ("mail-sync-dedup-passes-XXXXXX", &error);
+  g_assert_no_error (error);
+  MailStore *local = mail_store_open (root, "u@example.com", &error);
+  g_assert_no_error (error);
+
+  MailBackend *remote = mail_backend_fake_new ();
+  FakeFolderSpec one_folder[] = { { "f-inbox", "Inbox", NULL, 0, 1 } };
+  FakeMessageSpec inbox[] = {
+    { "inbox-uid-1", "Greetings", "alice@example.com",
+      1700000000, FALSE, "Shared body bytes", "<gmail-mid-42@example.com>" },
+  };
+  mail_backend_fake_set_folders (remote, one_folder, G_N_ELEMENTS (one_folder));
+  mail_backend_fake_set_messages (remote, "f-inbox", inbox, G_N_ELEMENTS (inbox));
+
+  MailSync *sync = mail_sync_new ();
+  run_to_completion (sync, remote, local, NULL);
+  g_assert_cmpuint (mail_backend_fake_fetch_raw_calls (remote), ==, 1);
+
+  /* Pass 2 — "All Mail" appears with the same content_key. */
+  FakeFolderSpec two_folders[] = {
+    { "f-inbox", "Inbox", NULL, 0, 1 },
+    { "f-all", "All Mail", NULL, 0, 1 },
+  };
+  FakeMessageSpec all_mail[] = {
+    { "all-uid-7", "Greetings", "alice@example.com",
+      1700000000, FALSE, "Shared body bytes", "<gmail-mid-42@example.com>" },
+  };
+  mail_backend_fake_set_folders (remote, two_folders, G_N_ELEMENTS (two_folders));
+  mail_backend_fake_set_messages (remote, "f-all", all_mail, G_N_ELEMENTS (all_mail));
+
+  run_to_completion (sync, remote, local, NULL);
+
+  /* Still exactly 1 body fetch from the remote across both passes. */
+  g_assert_cmpuint (mail_backend_fake_fetch_raw_calls (remote), ==, 1);
+
+  /* And All Mail's message row exists locally. */
+  GHashTable *aml = mail_store_message_remote_ids (local, "f-all", &error);
+  g_assert_cmpuint (g_hash_table_size (aml), ==, 1);
+  g_assert_true (g_hash_table_contains (aml, "all-uid-7"));
+  g_hash_table_unref (aml);
+
+  g_object_unref (sync);
+  mail_backend_destroy (remote);
+  mail_store_close (local);
+  rm_rf (root);
+}
+
 int
 main (int argc,
       char **argv)
@@ -396,5 +537,7 @@ main (int argc,
   g_test_add_func ("/mail-sync/empty-remote", test_empty_remote_still_succeeds);
   g_test_add_func ("/mail-sync/large-folder-syncs-all", test_large_folder_syncs_all_messages);
   g_test_add_func ("/mail-sync/cancel-sets-terminal-status", test_cancel_sets_terminal_status);
+  g_test_add_func ("/mail-sync/dedup-by-content-key", test_dedup_by_content_key);
+  g_test_add_func ("/mail-sync/dedup-across-passes", test_dedup_across_passes);
   return g_test_run ();
 }

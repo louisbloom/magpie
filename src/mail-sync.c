@@ -33,6 +33,34 @@ typedef struct
   char *from_addr;
   gint64 received_unix;
   gboolean unread;
+} FetchAlias;
+
+static void
+fetch_alias_free (gpointer p)
+{
+  FetchAlias *a = p;
+  g_free (a->folder_remote_id);
+  g_free (a->folder_dir_name);
+  g_free (a->message_remote_id);
+  g_free (a->subject);
+  g_free (a->from_addr);
+  g_free (a);
+}
+
+typedef struct
+{
+  char *folder_remote_id;
+  char *folder_dir_name;
+  char *message_remote_id;
+  char *content_key; /* may be NULL; lets cross-folder duplicates share a body */
+  char *subject;
+  char *from_addr;
+  gint64 received_unix;
+  gboolean unread;
+  /* Same-pass cross-folder duplicates of this message. After the body
+   * lands in the master's folder, each alias gets a hardlinked
+   * Maildir entry + its own message row. */
+  GPtrArray *aliases; /* of FetchAlias *; may be NULL */
 } FetchItem;
 
 static void
@@ -42,8 +70,11 @@ fetch_item_free (gpointer p)
   g_free (it->folder_remote_id);
   g_free (it->folder_dir_name);
   g_free (it->message_remote_id);
+  g_free (it->content_key);
   g_free (it->subject);
   g_free (it->from_addr);
+  if (it->aliases != NULL)
+    g_ptr_array_unref (it->aliases);
   g_free (it);
 }
 
@@ -70,6 +101,15 @@ struct _MailSync
   /* Fetch queue, built across PHASE_LISTS. */
   GPtrArray *pending_fetches; /* of FetchItem* */
   guint fetch_index;
+
+  /* content_key -> FetchItem* (borrowed). Built across PHASE_LISTS
+   * to dedup messages whose body we'd otherwise fetch twice. The key
+   * strings are owned by this hash table. */
+  GHashTable *seen_content_keys;
+  /* Arena used for store-side dedup lookups within PHASE_LISTS — only
+   * the string outputs of mail_store_locate_body_by_content_key need
+   * it; reset between folders. */
+  MailArena dedup_arena;
 };
 
 enum
@@ -171,6 +211,8 @@ mail_sync_run_async (MailSync *self,
   self->folder_index = 0;
   self->pending_fetches = g_ptr_array_new_with_free_func (fetch_item_free);
   self->fetch_index = 0;
+  self->seen_content_keys = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+  mail_arena_init (&self->dedup_arena, 4096);
 
   set_running (self, TRUE);
   set_progress (self, 0.0);
@@ -331,7 +373,16 @@ on_messages_done (GObject *src,
       return;
     }
 
-  /* Queue fetches for new ids. */
+  /* Queue fetches for new ids, dedupping by content_key. Three
+   * outcomes per new (id, content_key):
+   *   A) content_key already in the local store (prior pass or this
+   *      pass already upserted) → hardlink the existing body into
+   *      this folder, upsert the row, do NOT queue a fetch.
+   *   B) content_key already in pending_fetches this pass → record an
+   *      alias on the master item; do NOT queue. After the master's
+   *      body lands, the post-fetch step hardlinks + upserts it here.
+   *   C) Otherwise → queue a normal FetchItem. NULL content_key
+   *      always falls through to C (no key, no dedup). */
   for (guint i = 0; i < messages->len; i++)
     {
       MailMessageMeta *m = g_ptr_array_index (messages, i);
@@ -339,15 +390,78 @@ on_messages_done (GObject *src,
       if (g_hash_table_contains (existing, m->id))
         continue; /* update path deferred (no flag push-back in v1) */
 
+      if (m->content_key != NULL && m->content_key[0] != '\0')
+        {
+          /* (A) Already on disk somewhere — hardlink + upsert now. */
+          mail_arena_reset (&self->dedup_arena);
+          const char *src_dir = NULL, *src_file = NULL;
+          if (mail_store_locate_body_by_content_key (self->local, m->content_key,
+                                                     &self->dedup_arena,
+                                                     &src_dir, &src_file, &error))
+            {
+              g_autofree char *new_name = NULL;
+              if (!mail_store_link_raw (self->local, src_dir, src_file, folder_dir,
+                                        !m->unread, &new_name, &error))
+                {
+                  g_hash_table_unref (existing);
+                  g_hash_table_unref (seen);
+                  finish_pass (self, error);
+                  return;
+                }
+              if (!mail_store_upsert_message (self->local, folder_id, m->id,
+                                              m->content_key, new_name,
+                                              m->subject, m->from, m->received_unix,
+                                              m->unread, NULL, &error))
+                {
+                  g_hash_table_unref (existing);
+                  g_hash_table_unref (seen);
+                  finish_pass (self, error);
+                  return;
+                }
+              continue;
+            }
+          if (error != NULL)
+            {
+              g_hash_table_unref (existing);
+              g_hash_table_unref (seen);
+              finish_pass (self, error);
+              return;
+            }
+
+          /* (B) Same-pass dup — attach to the master's alias list. */
+          FetchItem *master = g_hash_table_lookup (self->seen_content_keys, m->content_key);
+          if (master != NULL)
+            {
+              if (master->aliases == NULL)
+                master->aliases = g_ptr_array_new_with_free_func (fetch_alias_free);
+              FetchAlias *a = g_new0 (FetchAlias, 1);
+              a->folder_remote_id = g_strdup (folder_id);
+              a->folder_dir_name = g_strdup (folder_dir);
+              a->message_remote_id = g_strdup (m->id);
+              a->subject = g_strdup (m->subject);
+              a->from_addr = g_strdup (m->from);
+              a->received_unix = m->received_unix;
+              a->unread = m->unread;
+              g_ptr_array_add (master->aliases, a);
+              continue;
+            }
+        }
+
+      /* (C) First sighting (or no content_key) — queue a real fetch. */
       FetchItem *it = g_new0 (FetchItem, 1);
       it->folder_remote_id = g_strdup (folder_id);
       it->folder_dir_name = g_strdup (folder_dir);
       it->message_remote_id = g_strdup (m->id);
+      it->content_key = m->content_key != NULL ? g_strdup (m->content_key) : NULL;
       it->subject = g_strdup (m->subject);
       it->from_addr = g_strdup (m->from);
       it->received_unix = m->received_unix;
       it->unread = m->unread;
       g_ptr_array_add (self->pending_fetches, it);
+
+      if (it->content_key != NULL)
+        g_hash_table_insert (self->seen_content_keys,
+                             g_strdup (it->content_key), it);
     }
 
   /* Drop locally-only ids within this window. */
@@ -432,11 +546,40 @@ on_fetch_done (GObject *src,
       return;
     }
   if (!mail_store_upsert_message (self->local, it->folder_remote_id, it->message_remote_id,
-                                  filename, it->subject, it->from_addr,
+                                  it->content_key, filename, it->subject, it->from_addr,
                                   it->received_unix, it->unread, NULL, &error))
     {
       finish_pass (self, error);
       return;
+    }
+
+  /* For each same-pass alias of this message: hardlink the freshly
+   * written body into the alias's folder and upsert its row. The
+   * master body file stays the canonical source; aliases share the
+   * underlying inode (or fall back to a byte copy across filesystems
+   * via mail_store_link_raw). */
+  if (it->aliases != NULL)
+    {
+      for (guint i = 0; i < it->aliases->len; i++)
+        {
+          FetchAlias *a = g_ptr_array_index (it->aliases, i);
+          g_autofree char *alias_filename = NULL;
+          if (!mail_store_link_raw (self->local, it->folder_dir_name, filename,
+                                    a->folder_dir_name, !a->unread,
+                                    &alias_filename, &error))
+            {
+              finish_pass (self, error);
+              return;
+            }
+          if (!mail_store_upsert_message (self->local, a->folder_remote_id,
+                                          a->message_remote_id, it->content_key,
+                                          alias_filename, a->subject, a->from_addr,
+                                          a->received_unix, a->unread, NULL, &error))
+            {
+              finish_pass (self, error);
+              return;
+            }
+        }
     }
 
   self->fetch_index++;
@@ -468,6 +611,8 @@ finish_pass (MailSync *self,
   g_clear_pointer (&self->folder_remote_ids, g_ptr_array_unref);
   g_clear_pointer (&self->folder_dir_names, g_ptr_array_unref);
   g_clear_pointer (&self->pending_fetches, g_ptr_array_unref);
+  g_clear_pointer (&self->seen_content_keys, g_hash_table_unref);
+  mail_arena_destroy (&self->dedup_arena);
   self->phase = PHASE_IDLE;
 
   /* Surface the terminal outcome in :status so observers (the account
@@ -536,6 +681,10 @@ mail_sync_finalize (GObject *object)
   g_clear_pointer (&self->folder_remote_ids, g_ptr_array_unref);
   g_clear_pointer (&self->folder_dir_names, g_ptr_array_unref);
   g_clear_pointer (&self->pending_fetches, g_ptr_array_unref);
+  g_clear_pointer (&self->seen_content_keys, g_hash_table_unref);
+  /* dedup_arena is destroyed in finish_pass; safe to destroy again here
+   * if finalize fires while a pass is in flight (mail_arena_destroy is
+   * idempotent on a zeroed arena). */
   g_free (self->status);
   G_OBJECT_CLASS (mail_sync_parent_class)->finalize (object);
 }

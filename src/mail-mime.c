@@ -34,8 +34,8 @@
 
 #include <gmime/gmime.h>
 
-static void
-ensure_gmime_init (void)
+void
+mail_mime_ensure_init (void)
 {
   static gsize once = 0;
   if (g_once_init_enter (&once))
@@ -44,6 +44,10 @@ ensure_gmime_init (void)
       g_once_init_leave (&once, 1);
     }
 }
+
+/* Keep the internal name working for the existing call sites below
+ * without churning every reference. */
+#define ensure_gmime_init mail_mime_ensure_init
 
 static gboolean
 is_text_plain (GMimeObject *obj)

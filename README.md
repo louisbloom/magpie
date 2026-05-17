@@ -119,14 +119,19 @@ Early prototype. The current shape:
   rendering path never blocks on the network and the sync engine is
   the only thing that talks to providers.
 - **Providers.** Microsoft Graph (functional, with `@odata.nextLink`
-  pagination); IMAP (compile-only stub). Selection is per-account via
+  pagination); IMAP via libetpan with SASL XOAUTH2 (Gmail tested),
+  with cross-folder body deduplication keyed on the RFC 5322
+  `Message-ID` header — a message in INBOX and `[Gmail]/All Mail`
+  is fetched once and the Maildir bodies hardlink-share an inode.
+  Selection is per-account via
   GOA's reported provider type.
-- **Tests.** Twelve test binaries under `tests/`, running under
+- **Tests.** Thirteen test binaries under `tests/`, running under
   `gtk_test_init` where they touch widgets: `test-arena`,
   `test-accounts`, `test-sidebar`, `test-backend-contract`,
-  `test-message-list`, `test-message-view`, `test-mime`, `test-store`,
-  `test-backend-store`, `test-sync`, `test-eta`, `test-account-page`.
-  Every bug fix lands with a regression test (see the principles).
+  `test-message-list`, `test-message-view`, `test-mime`,
+  `test-imap-id`, `test-store`, `test-backend-store`, `test-sync`,
+  `test-eta`, `test-account-page`. Every bug fix lands with a
+  regression test (see the principles).
 
 ## Build
 

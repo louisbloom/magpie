@@ -67,10 +67,16 @@ gboolean mail_store_delete_folder (MailStore *self,
 /* --- messages ------------------------------------------------- */
 
 /* Insert-or-update a message row keyed by remote_id. Does not touch
- * the raw file; caller does that via mail_store_write_raw first. */
+ * the raw file; caller does that via mail_store_write_raw first.
+ * @content_key may be NULL; when non-NULL it lets future syncs find
+ * an existing body (any folder) and hardlink instead of re-fetching.
+ * On update, a non-NULL content_key overwrites the stored one; NULL
+ * preserves the existing value (so backends that learn the key only
+ * later don't clobber it on a re-pass). */
 gboolean mail_store_upsert_message (MailStore *self,
                                     const char *folder_remote_id,
                                     const char *remote_id,
+                                    const char *content_key,
                                     const char *filename,
                                     const char *subject,
                                     const char *from_addr,
@@ -78,6 +84,17 @@ gboolean mail_store_upsert_message (MailStore *self,
                                     gboolean unread,
                                     const char *flags,
                                     GError **error);
+
+/* Find any existing message row whose content_key matches and return
+ * its on-disk location. The sync engine uses this to detect "I
+ * already have this body somewhere" and hardlink rather than refetch.
+ * Returns FALSE without setting *error when no match exists. */
+gboolean mail_store_locate_body_by_content_key (MailStore *self,
+                                                const char *content_key,
+                                                MailArena *arena,
+                                                const char **out_dir_name,
+                                                const char **out_filename,
+                                                GError **error);
 
 /* Top-@top_n messages for a folder ordered by received_unix DESC.
  * MailMessageMeta fields are arena-allocated. */
@@ -124,5 +141,19 @@ GBytes *mail_store_read_raw (MailStore *self,
                              const char *dir_name,
                              const char *filename,
                              GError **error);
+
+/* Hardlink an existing body file into another folder. Used by the
+ * sync engine when dedupping cross-folder duplicates: one fetch,
+ * many hardlinked Maildir entries sharing the underlying inode. On
+ * EXDEV (filesystems differ across folders) falls back to a byte
+ * copy. The new leaf name is generated fresh and returned via
+ * *out_filename. */
+gboolean mail_store_link_raw (MailStore *self,
+                              const char *source_dir,
+                              const char *source_filename,
+                              const char *target_dir,
+                              gboolean seen,
+                              char **out_filename,
+                              GError **error);
 
 G_END_DECLS

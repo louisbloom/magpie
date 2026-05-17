@@ -139,7 +139,7 @@ seed_store (Fixture *f)
       g_autofree char *filename = NULL;
       g_assert_true (mail_store_write_raw (f->store, "Inbox", bytes, !seed[i].unread,
                                            &filename, &error));
-      g_assert_true (mail_store_upsert_message (f->store, "inbox", seed[i].id, filename,
+      g_assert_true (mail_store_upsert_message (f->store, "inbox", seed[i].id, NULL, filename,
                                                 seed[i].subject, seed[i].from,
                                                 seed[i].t, seed[i].unread, NULL, &error));
       g_assert_no_error (error);
