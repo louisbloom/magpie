@@ -114,6 +114,49 @@ test_folder_row_is_compact (Fixture *f, gconstpointer ud)
 }
 
 static void
+test_sidebar_natural_width_grows_with_identity (void)
+{
+  /* Regression: the sidebar must report a wider natural width when an
+   * account with a longer identity is added. mail-window.c reads this
+   * natural width and pins the AdwOverlaySplitView's min/max sidebar
+   * width to it, so a long email name pushes the sidebar out to fit
+   * without truncation. Build two sidebars side by side, one with a
+   * short identity and one with a long one, and assert the long one
+   * measures wider. */
+  MailBackend *fake_short = mail_backend_fake_new ();
+  FakeFolderSpec folders[] = {
+    { "inbox", "Inbox", NULL, 0, 0 },
+  };
+  mail_backend_fake_set_folders (fake_short, folders, G_N_ELEMENTS (folders));
+  MailAccount *acct_short = mail_account_new_for_test (fake_short, "a@b.c", "P");
+  MailSidebar *sb_short = MAIL_SIDEBAR (mail_sidebar_new ());
+  g_object_ref_sink (sb_short);
+  mail_sidebar_add_test_account (sb_short, acct_short);
+  pump_main_loop ();
+
+  MailBackend *fake_long = mail_backend_fake_new ();
+  mail_backend_fake_set_folders (fake_long, folders, G_N_ELEMENTS (folders));
+  MailAccount *acct_long = mail_account_new_for_test (fake_long,
+                                                      "really.long.email.address@some.company.example.com",
+                                                      "P");
+  MailSidebar *sb_long = MAIL_SIDEBAR (mail_sidebar_new ());
+  g_object_ref_sink (sb_long);
+  mail_sidebar_add_test_account (sb_long, acct_long);
+  pump_main_loop ();
+
+  int min_s = 0, nat_s = 0, min_l = 0, nat_l = 0;
+  gtk_widget_measure (GTK_WIDGET (sb_short), GTK_ORIENTATION_HORIZONTAL, -1,
+                      &min_s, &nat_s, NULL, NULL);
+  gtk_widget_measure (GTK_WIDGET (sb_long), GTK_ORIENTATION_HORIZONTAL, -1,
+                      &min_l, &nat_l, NULL, NULL);
+  g_assert_cmpint (nat_l, >, nat_s);
+
+  g_object_unref (sb_short);
+  g_object_unref (sb_long);
+  pump_main_loop ();
+}
+
+static void
 test_account_row_aligns_with_folder_rows (Fixture *f, gconstpointer ud)
 {
   /* Regression: AdwActionRow brought its own internal prefix/suffix
@@ -313,6 +356,8 @@ main (int argc,
               Fixture, NULL, fixture_set_up, test_folder_row_is_compact, fixture_tear_down);
   g_test_add ("/sidebar/account-row-aligns-with-folder-rows",
               Fixture, NULL, fixture_set_up, test_account_row_aligns_with_folder_rows, fixture_tear_down);
+  g_test_add_func ("/sidebar/natural-width-grows-with-identity",
+                   test_sidebar_natural_width_grows_with_identity);
   g_test_add ("/sidebar/account-row-not-activatable",
               Fixture, NULL, fixture_set_up, test_account_row_is_not_activatable, fixture_tear_down);
   g_test_add ("/sidebar/folder-activation-emits-signal",

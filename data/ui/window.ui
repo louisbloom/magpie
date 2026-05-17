@@ -15,14 +15,17 @@
     <property name="content">
       <object class="AdwOverlaySplitView" id="split_view">
         <property name="show-sidebar">True</property>
-        <!-- min raised from 200 so the account identity fits at default
-             window widths; fraction kept at 0.28 (1100 px window → 308 px
-             sidebar) since the account row is now compact (no hexpand
-             gap between title and refresh button). The 550sp breakpoint
-             still collapses the sidebar on phone-shaped windows. -->
-        <property name="min-sidebar-width">280</property>
+        <!-- These are seed values only. mail-window.c re-measures the
+             sidebar after each account/folder change and pins both
+             min and max sidebar width to the row content's natural
+             width (clamped to [SIDEBAR_MIN_FLOOR_PX, SIDEBAR_MAX_CAP_PX]).
+             The fraction is therefore effectively unused at runtime —
+             we keep the 0.25 HIG default for the brief moment before
+             the first measurement fires. The 550sp breakpoint still
+             collapses the sidebar on phone-shaped windows. -->
+        <property name="min-sidebar-width">240</property>
         <property name="max-sidebar-width">480</property>
-        <property name="sidebar-width-fraction">0.28</property>
+        <property name="sidebar-width-fraction">0.25</property>
         <property name="sidebar">
           <object class="AdwNavigationPage">
             <property name="title">Mail</property>

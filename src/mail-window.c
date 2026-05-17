@@ -41,6 +41,16 @@ static void recompute_nav_stack (MailWindow *self);
 static void on_account_added (MailSidebar *sidebar, MailAccount *acct, gpointer user_data);
 static void on_refresh_requested (MailSidebar *sidebar, MailAccount *acct, gpointer user_data);
 static void on_sync_running_notify (GObject *src, GParamSpec *pspec, gpointer user_data);
+static void schedule_sidebar_width_update (MailWindow *self);
+
+/* Hard floor (libadwaita's default min) and a cap so a runaway folder
+ * name can't eat the content pane. The HIG defaults documented in
+ * libadwaita's AdwOverlaySplitView reference are fraction=0.25,
+ * min=180sp, max=280sp; we override at runtime so the sidebar is a
+ * content-driven fixed pixel size that doesn't grow with window width
+ * and doesn't shrink with it either. */
+#define SIDEBAR_MIN_FLOOR_PX 240
+#define SIDEBAR_MAX_CAP_PX 480
 
 /* --- nav stack shape --------------------------------------------- */
 
@@ -130,6 +140,9 @@ on_account_added (MailSidebar *sidebar,
                   gpointer user_data)
 {
   MailWindow *self = MAIL_WINDOW (user_data);
+  /* Recompute sidebar width whenever the row set changes so a freshly-
+   * added account with a long identity grows the sidebar to fit. */
+  schedule_sidebar_width_update (self);
   if (acct == NULL || acct->sync == NULL)
     return;
   /* Use connect_object so the handler is auto-dropped if either object
@@ -137,6 +150,32 @@ on_account_added (MailSidebar *sidebar,
   g_signal_connect_object (acct->sync, "notify::running",
                            G_CALLBACK (on_sync_running_notify),
                            self, 0);
+}
+
+static gboolean
+update_sidebar_width_idle (gpointer user_data)
+{
+  MailWindow *self = MAIL_WINDOW (user_data);
+  if (self->split_view == NULL || self->sidebar == NULL)
+    return G_SOURCE_REMOVE;
+  int min = 0, nat = 0;
+  gtk_widget_measure (GTK_WIDGET (self->sidebar), GTK_ORIENTATION_HORIZONTAL, -1,
+                      &min, &nat, NULL, NULL);
+  int target = CLAMP (nat, SIDEBAR_MIN_FLOOR_PX, SIDEBAR_MAX_CAP_PX);
+  /* Pin both min and max to the same value so AdwOverlaySplitView's
+   * fraction-times-window-width calculation is clamped to that exact
+   * width — the sidebar stays the same size whether the window is
+   * fullscreen or small, and it grows only when content demands it. */
+  adw_overlay_split_view_set_max_sidebar_width (self->split_view, target);
+  adw_overlay_split_view_set_min_sidebar_width (self->split_view, target);
+  return G_SOURCE_REMOVE;
+}
+
+static void
+schedule_sidebar_width_update (MailWindow *self)
+{
+  /* Defer to idle so the row widget is realised before we measure. */
+  g_idle_add (update_sidebar_width_idle, self);
 }
 
 static void
@@ -159,7 +198,12 @@ on_sync_done (GObject *src,
   /* Re-list folders for the synced account so freshly-arrived folders/
    * messages appear immediately. */
   if (acct != NULL)
-    mail_sidebar_reload_folders (self->sidebar, acct);
+    {
+      mail_sidebar_reload_folders (self->sidebar, acct);
+      /* A new folder with a longer-than-current name may have arrived
+       * — re-measure so the sidebar grows to fit. */
+      schedule_sidebar_width_update (self);
+    }
 
   /* If the just-synced account's folder is what the user is looking at,
    * re-load the message-list so newly-arrived messages appear at the

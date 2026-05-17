@@ -182,12 +182,15 @@ build_account_row (MailSidebarItem *it,
   GtkWidget *vbox = gtk_box_new (GTK_ORIENTATION_VERTICAL, 2);
   gtk_widget_set_valign (vbox, GTK_ALIGN_CENTER);
 
+  /* No ellipsize / no single-line-mode cap: those properties also clip
+   * the label's reported natural width, which would defeat the
+   * measure-and-pin width logic in mail-window.c. wrap=FALSE keeps the
+   * label single-line and it reports its full text pixel width as
+   * natural, so the sidebar grows to fit. */
   GtkWidget *title = gtk_label_new (it->title);
   gtk_label_set_xalign (GTK_LABEL (title), 0.0);
   gtk_label_set_use_markup (GTK_LABEL (title), FALSE);
   gtk_label_set_wrap (GTK_LABEL (title), FALSE);
-  gtk_label_set_single_line_mode (GTK_LABEL (title), TRUE);
-  gtk_label_set_ellipsize (GTK_LABEL (title), PANGO_ELLIPSIZE_END);
   gtk_widget_set_tooltip_text (title, it->title);
   gtk_widget_add_css_class (title, "heading");
   gtk_box_append (GTK_BOX (vbox), title);
@@ -198,8 +201,6 @@ build_account_row (MailSidebarItem *it,
       gtk_label_set_xalign (GTK_LABEL (subtitle), 0.0);
       gtk_label_set_use_markup (GTK_LABEL (subtitle), FALSE);
       gtk_label_set_wrap (GTK_LABEL (subtitle), FALSE);
-      gtk_label_set_single_line_mode (GTK_LABEL (subtitle), TRUE);
-      gtk_label_set_ellipsize (GTK_LABEL (subtitle), PANGO_ELLIPSIZE_END);
       gtk_widget_add_css_class (subtitle, "caption");
       gtk_widget_add_css_class (subtitle, "dim-label");
       gtk_box_append (GTK_BOX (vbox), subtitle);
