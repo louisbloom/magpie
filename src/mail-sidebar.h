@@ -17,10 +17,11 @@ GtkWidget *mail_sidebar_new (void);
 /* Signals:
  *   folder-selected    (MailBackend* store_backend,
  *                       const char* folder_id,
- *                       MailAccount* account)
+ *                       MailAccount* account,
+ *                       const char* folder_display_name)
  *       — Emitted when the user activates a folder row. All pointers
- *         are borrowed; folder_id is valid until the sidebar reloads
- *         that folder's account.
+ *         are borrowed; folder_id / display_name are valid until the
+ *         sidebar reloads that folder's account.
  *
  *   account-added      (MailAccount* account)
  *       — Emitted each time an account row is appended (via GOA or via

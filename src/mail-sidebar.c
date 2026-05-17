@@ -213,7 +213,8 @@ on_row_activated (GtkListBox *list_box,
   MailSidebarItem *it = MAIL_SIDEBAR_ITEM (item);
   if (it->kind == MAIL_SIDEBAR_ITEM_FOLDER && it->folder_id != NULL)
     g_signal_emit (self, signals[SIGNAL_FOLDER_SELECTED], 0,
-                   it->account->store_backend, it->folder_id, it->account);
+                   it->account->store_backend, it->folder_id, it->account,
+                   it->title);
 }
 
 static guint
@@ -417,10 +418,11 @@ mail_sidebar_class_init (MailSidebarClass *klass)
                                                   0,
                                                   NULL, NULL, NULL,
                                                   G_TYPE_NONE,
-                                                  3,
+                                                  4,
                                                   G_TYPE_POINTER,
                                                   G_TYPE_STRING,
-                                                  G_TYPE_POINTER);
+                                                  G_TYPE_POINTER,
+                                                  G_TYPE_STRING);
   signals[SIGNAL_ACCOUNT_ADDED] = g_signal_new ("account-added",
                                                 G_TYPE_FROM_CLASS (klass),
                                                 G_SIGNAL_RUN_LAST,

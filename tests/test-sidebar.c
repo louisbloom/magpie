@@ -109,6 +109,7 @@ typedef struct
 {
   guint count;
   char *folder_id;
+  char *display_name;
   gpointer backend;
   gpointer account;
 } SignalCapture;
@@ -118,12 +119,15 @@ on_folder_selected (MailSidebar *s,
                     gpointer backend,
                     const char *folder_id,
                     gpointer account,
+                    const char *display_name,
                     gpointer user_data)
 {
   SignalCapture *cap = user_data;
   cap->count++;
   g_free (cap->folder_id);
+  g_free (cap->display_name);
   cap->folder_id = g_strdup (folder_id);
+  cap->display_name = g_strdup (display_name);
   cap->backend = backend;
   cap->account = account;
 }
@@ -145,11 +149,13 @@ test_folder_activation_emits_signal (Fixture *f, gconstpointer ud)
 
   g_assert_cmpuint (cap.count, ==, 1);
   g_assert_cmpstr (cap.folder_id, ==, "inbox");
+  g_assert_cmpstr (cap.display_name, ==, "Inbox");
   g_assert_true (cap.backend == f->fake);
   g_assert_nonnull (cap.account);
 
   g_signal_handler_disconnect (f->sidebar, handler);
   g_free (cap.folder_id);
+  g_free (cap.display_name);
 }
 
 typedef struct

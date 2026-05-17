@@ -19,6 +19,7 @@ struct _MailWindow
   MailSidebar *sidebar;
   MailMessageList *message_list;
   MailMessageView *message_view;
+  AdwNavigationPage *message_list_page;
   AdwNavigationPage *message_view_page;
   GtkToggleButton *plain_toggle;
 
@@ -69,6 +70,7 @@ on_folder_selected (MailSidebar *sidebar,
                     gpointer backend_ptr,
                     const char *folder_id,
                     gpointer account_ptr,
+                    const char *folder_display_name,
                     gpointer user_data)
 {
   MailWindow *self = MAIL_WINDOW (user_data);
@@ -77,6 +79,12 @@ on_folder_selected (MailSidebar *sidebar,
   if (backend == NULL || folder_id == NULL)
     return;
   self->current_account = acct;
+  /* Reflect the selected folder in the content pane's header title.
+   * Falls back to the app name on the (unreachable here) NULL case. */
+  adw_navigation_page_set_title (self->message_list_page,
+                                 (folder_display_name != NULL && folder_display_name[0] != '\0')
+                                     ? folder_display_name
+                                     : "Mail");
   recompute_nav_stack (self);
   /* Only load if we're showing the list — otherwise the load would
    * fire into the message-list widget while the user can't see it. */
@@ -231,6 +239,7 @@ mail_window_class_init (MailWindowClass *klass)
   gtk_widget_class_bind_template_child (widget_class, MailWindow, sidebar);
   gtk_widget_class_bind_template_child (widget_class, MailWindow, message_list);
   gtk_widget_class_bind_template_child (widget_class, MailWindow, message_view);
+  gtk_widget_class_bind_template_child (widget_class, MailWindow, message_list_page);
   gtk_widget_class_bind_template_child (widget_class, MailWindow, message_view_page);
   gtk_widget_class_bind_template_child (widget_class, MailWindow, plain_toggle);
 }

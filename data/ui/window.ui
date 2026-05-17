@@ -41,7 +41,7 @@
             <property name="child">
               <object class="AdwNavigationView" id="nav_view">
                 <child>
-                  <object class="AdwNavigationPage">
+                  <object class="AdwNavigationPage" id="message_list_page">
                     <property name="tag">message-list</property>
                     <property name="title">Mail</property>
                     <property name="child">
