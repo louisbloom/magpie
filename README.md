@@ -97,5 +97,20 @@ make check
 ./src/mail
 ```
 
-`make format` runs `clang-format` on the C tree and `xmllint` (2-space
-GNOME style) on the XML / GtkBuilder files under `data/`.
+## Developer tooling
+
+- `make format` — `clang-format` on the C tree, `xmllint` (2-space GNOME
+  style) on the XML / GtkBuilder files under `data/`, and `prettier` on
+  Markdown. Each pass is skipped with a notice if the tool isn't on
+  `$PATH`, so a partial dev environment still works.
+- `make bear` — clean rebuild under [bear](https://github.com/rizsotto/Bear),
+  emits `compile_commands.json` at the project root for clangd. Builds
+  tests too so the database covers everything under `src/` and
+  `tests/`.
+
+Optional dev tools:
+
+```sh
+sudo dnf install clang-tools-extra libxml2 bear
+npm install -g prettier
+```

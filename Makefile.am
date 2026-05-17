@@ -37,3 +37,18 @@ format:
 	else \
 	    echo "prettier not found - skipping Markdown." >&2; \
 	fi
+
+# Emit compile_commands.json for clangd. Runs from scratch so bear
+# sees every gcc invocation; otherwise an incremental build skips
+# already-compiled translation units and leaves them out of the DB.
+# Builds tests too (via `make check`) so clangd has entries for the
+# files under tests/ as well.
+.PHONY: bear
+bear:
+	@if ! command -v bear >/dev/null 2>&1; then \
+	    echo "bear not found (install bear)" >&2; exit 1; \
+	fi; \
+	echo "Cleaning for bear interception..."; \
+	$(MAKE) clean >/dev/null; \
+	echo "Building under bear -> $(abs_top_srcdir)/compile_commands.json"; \
+	bear --output $(abs_top_srcdir)/compile_commands.json -- $(MAKE) check
