@@ -258,8 +258,20 @@ mail_message_view_init (MailMessageView *self)
   self->cancellable = g_cancellable_new ();
 
   GtkWidget *scroller = gtk_scrolled_window_new ();
+  /* GTK_POLICY_ALWAYS on both axes — not AUTOMATIC — because the
+   * scrolled window's "show/hide a scrollbar when content size changes"
+   * decision races with AdwNavigationView's page-swap animation. The
+   * captured backtrace showed gtk_scrolled_window_snapshot descending
+   * into the horizontal scrollbar's internal slider GtkGizmo while its
+   * allocation hadn't been computed yet — fires
+   *   Trying to snapshot GtkGizmo without a current allocation
+   * on every click that opens a message. Keeping the scrollbars
+   * permanently allocated avoids the transition entirely. Overlay
+   * scrolling stays off so the scrollbars don't fade-animate (another
+   * source of allocation churn). */
   gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scroller),
-                                  GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
+                                  GTK_POLICY_ALWAYS, GTK_POLICY_ALWAYS);
+  gtk_scrolled_window_set_overlay_scrolling (GTK_SCROLLED_WINDOW (scroller), FALSE);
   gtk_widget_set_parent (scroller, GTK_WIDGET (self));
 
   self->buffer = gtk_text_buffer_new (NULL);

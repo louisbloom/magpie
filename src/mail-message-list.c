@@ -289,8 +289,15 @@ mail_message_list_init (MailMessageList *self)
 
   /* "list" */
   GtkWidget *scroller = gtk_scrolled_window_new ();
+  /* GTK_POLICY_ALWAYS (not AUTOMATIC) on the vertical axis: the
+   * scrollbar's slider GtkGizmo races against AdwNavigationView's
+   * page-swap snapshot when AUTOMATIC re-evaluates whether the bar is
+   * needed (folder load with different row count, or remap on pop
+   * back from message-view). See the matching fix and bt analysis in
+   * mail-message-view.c. */
   gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scroller),
-                                  GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+                                  GTK_POLICY_NEVER, GTK_POLICY_ALWAYS);
+  gtk_scrolled_window_set_overlay_scrolling (GTK_SCROLLED_WINDOW (scroller), FALSE);
   self->list_box = GTK_LIST_BOX (gtk_list_box_new ());
   gtk_widget_add_css_class (GTK_WIDGET (self->list_box), "navigation-sidebar");
   gtk_list_box_bind_model (self->list_box, G_LIST_MODEL (self->store),

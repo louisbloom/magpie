@@ -75,7 +75,7 @@
                               <object class="GtkToggleButton" id="plain_toggle">
                                 <property name="icon-name">view-paged-symbolic</property>
                                 <property name="tooltip-text" translatable="yes">Show plain text</property>
-                                <property name="visible">False</property>
+                                <property name="sensitive">False</property>
                               </object>
                             </child>
                           </object>

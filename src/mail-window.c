@@ -51,8 +51,17 @@ on_message_activated (MailMessageList *list,
     return;
   adw_navigation_page_set_title (self->message_view_page,
                                  (subject != NULL && subject[0] != '\0') ? subject : "Message");
-  mail_message_view_load (self->message_view, backend, message_id);
+  /* Push BEFORE loading so the navigation-view's size-allocate pass runs
+   * over the message-view page before mail_message_view_load triggers a
+   * gtk_text_buffer_set_text. Loading first queued a redraw on the
+   * scrolled window's internal scrollbar gizmos while the page was
+   * still unallocated, producing intermittent
+   *   Gtk-WARNING: Trying to snapshot GtkGizmo without a current allocation
+   * on every message click. Both calls happen in the same event-loop
+   * turn, so the user still only ever sees "Loading…" — never the
+   * previous message's content. */
   adw_navigation_view_push_by_tag (self->nav_view, "message-view");
+  mail_message_view_load (self->message_view, backend, message_id);
 }
 
 static void
@@ -98,8 +107,17 @@ mail_window_init (MailWindow *self)
                           self->sidebar_toggle, "active",
                           G_BINDING_BIDIRECTIONAL | G_BINDING_SYNC_CREATE);
 
+  /* Bind has-plain-part to `sensitive` rather than `visible`: toggling
+   * the toggle's visibility on each message swap re-layouts the
+   * AdwHeaderBar's end-slot GtkGizmo while the page is mid-animation
+   * from the AdwNavigationView push, producing the intermittent
+   *   Gtk-WARNING: Trying to snapshot GtkGizmo without a current allocation
+   * pair. Keeping the toggle always present (just enabled/disabled)
+   * makes the header-bar layout stable across navigation. Disabled
+   * state also tells the user "this message has no plain alternative"
+   * rather than silently hiding the feature. */
   g_object_bind_property (self->message_view, "has-plain-part",
-                          self->plain_toggle, "visible",
+                          self->plain_toggle, "sensitive",
                           G_BINDING_SYNC_CREATE);
   g_object_bind_property (self->message_view, "show-plain",
                           self->plain_toggle, "active",

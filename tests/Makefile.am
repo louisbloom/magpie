@@ -1,6 +1,6 @@
 # tests/Makefile.am - Unit tests for GNOME Mail.
 
-UNIT_TESTS = test-arena test-accounts test-sidebar test-backend-contract test-message-list test-mime
+UNIT_TESTS = test-arena test-accounts test-sidebar test-backend-contract test-message-list test-message-view test-mime
 
 check_PROGRAMS = $(UNIT_TESTS)
 TESTS          = $(UNIT_TESTS)
@@ -54,6 +54,17 @@ test_message_list_SOURCES = \
     $(top_srcdir)/src/mail-message-list.c
 
 test_message_list_LDADD = $(LDADD)
+
+test_message_view_SOURCES = \
+    test-message-view.c \
+    mail-backend-fake.c \
+    mail-backend-fake.h \
+    $(top_srcdir)/src/mail-arena.c \
+    $(top_srcdir)/src/mail-backend.c \
+    $(top_srcdir)/src/mail-message-view.c \
+    $(top_srcdir)/src/mail-mime.c
+
+test_message_view_LDADD = $(LDADD)
 
 test_mime_SOURCES = \
     test-mime.c \
