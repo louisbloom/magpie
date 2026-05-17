@@ -138,6 +138,23 @@ test_account_row_aligns_with_folder_rows (Fixture *f, gconstpointer ud)
   g_assert_cmpint (gtk_widget_get_margin_end (account_box),
                    ==,
                    gtk_widget_get_margin_end (folder_box));
+
+  /* Margins alone aren't enough: if the icon slots have different
+   * widths, the title's start position differs between row kinds. The
+   * account row uses a 24 px provider icon and the folder rows use a
+   * 16 px symbolic icon; both occupy the same 24 px-wide slot via
+   * gtk_widget_set_size_request so their centers (and the title text
+   * that follows) line up. Check size-request widths, not pixel sizes
+   * (which legitimately differ). */
+  GtkWidget *account_icon = gtk_widget_get_first_child (account_box);
+  GtkWidget *folder_icon = gtk_widget_get_first_child (folder_box);
+  g_assert_true (GTK_IS_IMAGE (account_icon));
+  g_assert_true (GTK_IS_IMAGE (folder_icon));
+  int account_slot_w = 0, folder_slot_w = 0;
+  gtk_widget_get_size_request (account_icon, &account_slot_w, NULL);
+  gtk_widget_get_size_request (folder_icon, &folder_slot_w, NULL);
+  g_assert_cmpint (account_slot_w, >, 0);
+  g_assert_cmpint (account_slot_w, ==, folder_slot_w);
 }
 
 static void

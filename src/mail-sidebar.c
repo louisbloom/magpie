@@ -159,8 +159,15 @@ build_account_row (MailSidebarItem *it,
     }
   if (image == NULL)
     image = gtk_image_new_from_icon_name ("mail-symbolic");
+  /* Provider icon stays at 24 px (a 16 px icon felt too small for a
+   * header row). Both account and folder rows reserve a 24 px-wide
+   * icon slot via size-request, so the centers line up regardless of
+   * the actual icon size — the 24 px provider icon fills the slot
+   * and the 16 px folder icons render centered in it. */
   gtk_image_set_pixel_size (GTK_IMAGE (image), 24);
+  gtk_widget_set_halign (image, GTK_ALIGN_CENTER);
   gtk_widget_set_valign (image, GTK_ALIGN_CENTER);
+  gtk_widget_set_size_request (image, 24, -1);
   gtk_box_append (GTK_BOX (box), image);
 
   /* Title + subtitle vbox. Single-line (no wrap) so we never get the
@@ -169,8 +176,10 @@ build_account_row (MailSidebarItem *it,
    * the tooltip then surfaces the full address. The sidebar's default
    * width (set in window.ui via sidebar-width-fraction) is sized so a
    * normal 20-30 char email shows in full without truncation. */
+  /* No hexpand on the vbox: the refresh button sits immediately to the
+   * right of the title text instead of being pushed to the far right
+   * edge with a big empty gap when the identity is short. */
   GtkWidget *vbox = gtk_box_new (GTK_ORIENTATION_VERTICAL, 2);
-  gtk_widget_set_hexpand (vbox, TRUE);
   gtk_widget_set_valign (vbox, GTK_ALIGN_CENTER);
 
   GtkWidget *title = gtk_label_new (it->title);
@@ -225,6 +234,11 @@ build_folder_row (MailSidebarItem *it)
 
   GtkWidget *image = gtk_image_new_from_icon_name ("folder-symbolic");
   gtk_image_set_pixel_size (GTK_IMAGE (image), 16);
+  /* Same 24 px-wide icon slot as the account row's provider icon, so
+   * centers line up vertically between the two row kinds even though
+   * the folder icon is 16 px and the provider icon is 24 px. */
+  gtk_widget_set_halign (image, GTK_ALIGN_CENTER);
+  gtk_widget_set_size_request (image, 24, -1);
   gtk_box_append (GTK_BOX (box), image);
 
   GtkWidget *label = gtk_label_new (it->title);
