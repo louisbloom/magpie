@@ -20,8 +20,6 @@
 
 #include "mail-sidebar.h"
 
-#include "mail-refresh-button.h"
-
 #include <adwaita.h>
 #include <goa/goa.h>
 
@@ -117,7 +115,6 @@ enum
   SIGNAL_FOLDER_SELECTED,
   SIGNAL_ACCOUNT_SELECTED,
   SIGNAL_ACCOUNT_ADDED,
-  SIGNAL_REFRESH_REQUESTED,
   N_SIGNALS,
 };
 
@@ -125,22 +122,9 @@ static guint signals[N_SIGNALS];
 
 G_DEFINE_FINAL_TYPE (MailSidebar, mail_sidebar, GTK_TYPE_WIDGET)
 
-static void
-mail_sidebar_emit_refresh_for_button (MailSidebar *self,
-                                      GtkWidget *button)
-{
-  MailAccount *acct = g_object_get_data (G_OBJECT (button), "mail-sidebar-account");
-  if (acct == NULL)
-    return;
-  g_signal_emit (self, signals[SIGNAL_REFRESH_REQUESTED], 0, acct);
-}
-
-/* Account rows: hand-rolled GtkListBoxRow with the same horizontal
- * margins (start=12, end=6) as the folder rows below, so the provider
- * icon lines up with the folder icons and the refresh button lines up
- * with the unread-count badges. AdwActionRow added its own internal
- * prefix/suffix padding which pushed the icons out of alignment and
- * stole the space the email needed to render in full. */
+/* Account rows: hand-rolled GtkListBoxRow holding the provider icon,
+ * identity, and provider name. Starting a sync used to live on a
+ * trailing refresh button here; it now lives on the account page. */
 static GtkWidget *
 build_account_row (MailSidebarItem *it,
                    MailSidebar *self)
@@ -207,13 +191,6 @@ build_account_row (MailSidebarItem *it,
       gtk_box_append (GTK_BOX (vbox), subtitle);
     }
   gtk_box_append (GTK_BOX (box), vbox);
-
-  GtkWidget *refresh = mail_refresh_button_new (it->account != NULL ? it->account->sync : NULL);
-  g_object_set_data (G_OBJECT (refresh), "mail-sidebar-account", it->account);
-  g_signal_connect_swapped (refresh, "clicked",
-                            G_CALLBACK (mail_sidebar_emit_refresh_for_button), self);
-  gtk_widget_set_valign (refresh, GTK_ALIGN_CENTER);
-  gtk_box_append (GTK_BOX (box), refresh);
 
   GtkWidget *row = gtk_list_box_row_new ();
   /* Account rows are first-class selection targets: clicking one shows
@@ -543,11 +520,6 @@ mail_sidebar_class_init (MailSidebarClass *klass)
                                                 G_SIGNAL_RUN_LAST,
                                                 0, NULL, NULL, NULL,
                                                 G_TYPE_NONE, 1, G_TYPE_POINTER);
-  signals[SIGNAL_REFRESH_REQUESTED] = g_signal_new ("refresh-requested",
-                                                    G_TYPE_FROM_CLASS (klass),
-                                                    G_SIGNAL_RUN_LAST,
-                                                    0, NULL, NULL, NULL,
-                                                    G_TYPE_NONE, 1, G_TYPE_POINTER);
 }
 
 static void

@@ -41,7 +41,7 @@ G_DEFINE_FINAL_TYPE (MailWindow, mail_window, ADW_TYPE_APPLICATION_WINDOW)
 static void recompute_nav_stack (MailWindow *self);
 static void on_account_added (MailSidebar *sidebar, MailAccount *acct, gpointer user_data);
 static void on_account_selected (MailSidebar *sidebar, MailAccount *acct, gpointer user_data);
-static void on_refresh_requested (MailSidebar *sidebar, MailAccount *acct, gpointer user_data);
+static void on_sync_requested (MailAccountPage *page, gpointer user_data);
 static void on_sync_running_notify (GObject *src, GParamSpec *pspec, gpointer user_data);
 static void schedule_sidebar_width_update (MailWindow *self);
 
@@ -253,11 +253,14 @@ on_sync_done (GObject *src,
 }
 
 static void
-on_refresh_requested (MailSidebar *sidebar,
-                      MailAccount *acct,
-                      gpointer user_data)
+on_sync_requested (MailAccountPage *page,
+                   gpointer user_data)
 {
   MailWindow *self = MAIL_WINDOW (user_data);
+  /* The page only emits this when it's visible — i.e. when the user
+   * has the account page in the right pane — which means an account
+   * was selected, which means self->current_account is set. */
+  MailAccount *acct = self->current_account;
   if (acct == NULL || acct->sync == NULL || acct->remote_backend == NULL || acct->store == NULL)
     return;
   if (mail_sync_is_running (acct->sync))
@@ -277,12 +280,6 @@ on_refresh_requested (MailSidebar *sidebar,
   mail_sync_run_async (acct->sync, acct->remote_backend, acct->store,
                        self->current_pass_cancel,
                        on_sync_done, self);
-
-  /* Hop the sidebar selection to this account so the user sees the
-   * account page (which now shows progress) instead of being left on
-   * a folder while the right pane shows sync. */
-  if (!self->account_mode || self->current_account != acct)
-    mail_sidebar_select_account (self->sidebar, acct);
 }
 
 static void
@@ -390,8 +387,8 @@ mail_window_init (MailWindow *self)
                     G_CALLBACK (on_message_activated), self);
   g_signal_connect (self->sidebar, "account-added",
                     G_CALLBACK (on_account_added), self);
-  g_signal_connect (self->sidebar, "refresh-requested",
-                    G_CALLBACK (on_refresh_requested), self);
+  g_signal_connect (self->account_page, "sync-requested",
+                    G_CALLBACK (on_sync_requested), self);
 }
 
 MailWindow *

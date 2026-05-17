@@ -32,10 +32,8 @@ GtkWidget *mail_sidebar_new (void);
  *         mail_sidebar_add_test_account). The window subscribes so it
  *         can wire account-level UI (e.g. notify::running on acct->sync).
  *
- *   refresh-requested  (MailAccount* account)
- *       — Emitted when the user clicks the refresh button on an
- *         account row. The sidebar does NOT start the sync itself;
- *         the window owns the cancellable and the progress page.
+ *   (Sync-start is no longer a sidebar concern — the action lives on
+ *    MailAccountPage now, which emits its own sync-requested signal.)
  */
 
 /* Programmatically move the selection to @acct's row. Triggers the

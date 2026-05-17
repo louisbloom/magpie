@@ -50,7 +50,6 @@ test_sidebar_SOURCES = \
     $(top_srcdir)/src/mail-backend-store.c \
     $(top_srcdir)/src/mail-sync.c \
     $(top_srcdir)/src/mail-progress-ring.c \
-    $(top_srcdir)/src/mail-refresh-button.c \
     $(top_srcdir)/src/mail-backend-msgraph.c \
     $(top_srcdir)/src/mail-backend-imap.c
 

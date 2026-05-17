@@ -30,8 +30,6 @@ mail_SOURCES = \
     mail-sync.h \
     mail-progress-ring.c \
     mail-progress-ring.h \
-    mail-refresh-button.c \
-    mail-refresh-button.h \
     mail-account-page.c \
     mail-account-page.h \
     mail-eta.c \

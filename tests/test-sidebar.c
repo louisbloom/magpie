@@ -32,6 +32,7 @@ typedef struct
 {
   MailSidebar *sidebar;
   MailBackend *fake; /* borrowed; owned by the MailAccount we hand to the sidebar */
+  MailAccount *acct; /* borrowed; owned by the sidebar after add_test_account */
 } Fixture;
 
 static void
@@ -47,6 +48,7 @@ fixture_set_up (Fixture *f, gconstpointer ud)
   MailAccount *acct = mail_account_new_for_test (fake, "test@example", "Test Provider");
 
   f->fake = fake;
+  f->acct = acct;
   f->sidebar = MAIL_SIDEBAR (mail_sidebar_new ());
   g_object_ref_sink (f->sidebar);
 
@@ -327,44 +329,16 @@ test_mail_sidebar_select_account_programmatic (Fixture *f, gconstpointer ud)
   gulong handler = g_signal_connect (f->sidebar, "account-selected",
                                      G_CALLBACK (on_account_selected_capture), &cap);
 
-  /* fixture_set_up loaded one account. Look it up by walking the
-   * sidebar's rows for an item-bound account pointer. */
+  /* fixture_set_up exposed the test account on the fixture; clear
+   * any pre-selection so we pin that select_account() does the work. */
   GtkListBox *list_box = _mail_sidebar_get_list_box_for_test (f->sidebar);
-  GtkListBoxRow *account_row = gtk_list_box_get_row_at_index (list_box, 0);
-  g_assert_nonnull (account_row);
-  /* Don't pre-select — pin that select_account() does the work. */
   gtk_list_box_unselect_all (list_box);
   cap.count = 0;
 
-  /* The account-row's MailAccount is reachable via the refresh button's
-   * "mail-sidebar-account" data. Walk to find the button. */
-  MailAccount *acct = NULL;
-  GQueue stack = G_QUEUE_INIT;
-  g_queue_push_tail (&stack, gtk_widget_get_first_child (GTK_WIDGET (account_row)));
-  while (!g_queue_is_empty (&stack) && acct == NULL)
-    {
-      GtkWidget *w = g_queue_pop_head (&stack);
-      while (w != NULL)
-        {
-          gpointer p = g_object_get_data (G_OBJECT (w), "mail-sidebar-account");
-          if (p != NULL)
-            {
-              acct = p;
-              break;
-            }
-          GtkWidget *c = gtk_widget_get_first_child (w);
-          if (c != NULL)
-            g_queue_push_tail (&stack, c);
-          w = gtk_widget_get_next_sibling (w);
-        }
-    }
-  g_queue_clear (&stack);
-  g_assert_nonnull (acct);
-
-  mail_sidebar_select_account (f->sidebar, acct);
+  mail_sidebar_select_account (f->sidebar, f->acct);
 
   g_assert_cmpuint (cap.count, ==, 1);
-  g_assert_true (cap.account == acct);
+  g_assert_true (cap.account == f->acct);
 
   g_signal_handler_disconnect (f->sidebar, handler);
 }
@@ -385,50 +359,6 @@ test_account_added_signal_fires_for_test_account (Fixture *f, gconstpointer ud)
   g_assert_true (cap.account == acct);
   pump_main_loop ();
   g_object_unref (sb);
-}
-
-static void
-test_refresh_requested_signal_fires_on_button_click (Fixture *f, gconstpointer ud)
-{
-  /* The refresh button is added as an action-row suffix in build_row_widget.
-   * Find it by walking the account row's descendants. */
-  GtkListBox *list_box = _mail_sidebar_get_list_box_for_test (f->sidebar);
-  GtkListBoxRow *account_row = gtk_list_box_get_row_at_index (list_box, 0);
-  g_assert_nonnull (account_row);
-
-  GtkWidget *button = NULL;
-  for (GtkWidget *w = gtk_widget_get_first_child (GTK_WIDGET (account_row));
-       w != NULL && button == NULL;
-       w = gtk_widget_get_next_sibling (w))
-    {
-      /* Recursive descent until we find any GtkButton in the subtree. */
-      GQueue stack = G_QUEUE_INIT;
-      g_queue_push_tail (&stack, w);
-      while (!g_queue_is_empty (&stack) && button == NULL)
-        {
-          GtkWidget *cur = g_queue_pop_head (&stack);
-          if (GTK_IS_BUTTON (cur))
-            {
-              button = cur;
-              break;
-            }
-          for (GtkWidget *c = gtk_widget_get_first_child (cur);
-               c != NULL;
-               c = gtk_widget_get_next_sibling (c))
-            g_queue_push_tail (&stack, c);
-        }
-      g_queue_clear (&stack);
-    }
-  g_assert_nonnull (button);
-
-  guint refresh_count = 0;
-  g_signal_connect_swapped (f->sidebar, "refresh-requested",
-                            G_CALLBACK (g_atomic_int_inc), &refresh_count);
-  /* The button itself is sensitive iff sync != NULL. For test
-   * accounts sync is NULL, so the button is insensitive and "clicked"
-   * normally won't fire — but g_signal_emit_by_name forces it. */
-  g_signal_emit_by_name (button, "clicked");
-  g_assert_cmpuint (refresh_count, ==, 1);
 }
 
 int
@@ -459,9 +389,6 @@ main (int argc,
   g_test_add ("/sidebar/account-added-signal",
               Fixture, NULL, fixture_set_up,
               test_account_added_signal_fires_for_test_account, fixture_tear_down);
-  g_test_add ("/sidebar/refresh-requested-signal",
-              Fixture, NULL, fixture_set_up,
-              test_refresh_requested_signal_fires_on_button_click, fixture_tear_down);
 
   return g_test_run ();
 }

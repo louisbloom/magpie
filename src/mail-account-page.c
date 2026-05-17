@@ -18,11 +18,11 @@ struct _MailAccountPage
   AdwNavigationPage parent;
 
   AdwWindowTitle *header_title; /* identity (title) + provider (subtitle) */
+  AdwStatusPage *status_page;   /* HIG-shaped body container */
   MailProgressRing *ring;
-  GtkLabel *heading;
-  GtkLabel *status;
   GtkLabel *eta_label;
-  GtkButton *cancel_button;
+  GtkButton *sync_button;   /* "Sync now" — visible when idle */
+  GtkButton *cancel_button; /* "Cancel"   — visible when active */
 
   MailSync *sync;            /* ref'd */
   GCancellable *cancellable; /* ref'd */
@@ -32,6 +32,14 @@ struct _MailAccountPage
   gulong notify_status_id;
   gulong notify_running_id;
 };
+
+enum
+{
+  SIGNAL_SYNC_REQUESTED,
+  N_SIGNALS,
+};
+
+static guint signals[N_SIGNALS];
 
 G_DEFINE_FINAL_TYPE (MailAccountPage, mail_account_page, ADW_TYPE_NAVIGATION_PAGE)
 
@@ -45,28 +53,19 @@ static void
 apply_render_mode (MailAccountPage *self)
 {
   /* The page has two visual modes, driven by whether the bound sync
-   * is currently running. Idle covers both "no sync bound" and "sync
-   * bound but not running" (e.g. just-finished pass), so the user can
-   * still see the sync's final status text after the ring/cancel are
-   * hidden. */
+   * is currently running. The sync indicator (ring + ETA + Cancel)
+   * shows only in active; idle shows the Sync-now button. The
+   * description (AdwStatusPage's main text) is driven by update_status
+   * and reads the bound sync's :status in both modes (so the user can
+   * still see the sync's final status text after the ring is hidden). */
   gboolean active = sync_is_active (self);
-  const char *identity = self->identity != NULL ? self->identity : "";
-
-  if (active)
-    {
-      g_autofree char *text = g_strdup_printf ("Syncing %s", identity);
-      gtk_label_set_label (self->heading, text);
-    }
-  else
-    {
-      gtk_label_set_label (self->heading, identity);
-    }
 
   gtk_widget_set_visible (GTK_WIDGET (self->ring), active);
   gtk_widget_set_visible (GTK_WIDGET (self->eta_label), active);
   gtk_widget_set_visible (GTK_WIDGET (self->cancel_button), active);
   gtk_widget_set_sensitive (GTK_WIDGET (self->cancel_button),
                             active && self->cancellable != NULL);
+  gtk_widget_set_visible (GTK_WIDGET (self->sync_button), !active);
 }
 
 static void
@@ -90,9 +89,10 @@ static void
 update_status (MailAccountPage *self)
 {
   if (self->sync != NULL)
-    gtk_label_set_label (self->status, mail_sync_get_status (self->sync));
+    adw_status_page_set_description (self->status_page,
+                                     mail_sync_get_status (self->sync));
   else
-    gtk_label_set_label (self->status, "No sync in progress. Click refresh to sync.");
+    adw_status_page_set_description (self->status_page, "No sync in progress.");
 }
 
 static void
@@ -134,7 +134,15 @@ on_cancel_clicked (GtkButton *btn,
    * sync engine — the in-flight HTTP request may take a moment to
    * unwind. finish_pass overwrites this with "Canceled." once the
    * pass actually ends. */
-  gtk_label_set_label (self->status, "Canceling…");
+  adw_status_page_set_description (self->status_page, "Canceling…");
+}
+
+static void
+on_sync_clicked (GtkButton *btn,
+                 gpointer user_data)
+{
+  MailAccountPage *self = user_data;
+  g_signal_emit (self, signals[SIGNAL_SYNC_REQUESTED], 0);
 }
 
 static void
@@ -214,13 +222,6 @@ mail_account_page_new (void)
   return g_object_new (MAIL_TYPE_ACCOUNT_PAGE, NULL);
 }
 
-const char *
-_mail_account_page_get_heading_text_for_test (MailAccountPage *self)
-{
-  g_return_val_if_fail (MAIL_IS_ACCOUNT_PAGE (self), NULL);
-  return gtk_label_get_label (self->heading);
-}
-
 gboolean
 _mail_account_page_is_cancel_visible_for_test (MailAccountPage *self)
 {
@@ -228,11 +229,32 @@ _mail_account_page_is_cancel_visible_for_test (MailAccountPage *self)
   return gtk_widget_get_visible (GTK_WIDGET (self->cancel_button));
 }
 
+gboolean
+_mail_account_page_is_sync_button_visible_for_test (MailAccountPage *self)
+{
+  g_return_val_if_fail (MAIL_IS_ACCOUNT_PAGE (self), FALSE);
+  return gtk_widget_get_visible (GTK_WIDGET (self->sync_button));
+}
+
+GtkButton *
+_mail_account_page_get_sync_button_for_test (MailAccountPage *self)
+{
+  g_return_val_if_fail (MAIL_IS_ACCOUNT_PAGE (self), NULL);
+  return self->sync_button;
+}
+
 const char *
 _mail_account_page_get_subtitle_for_test (MailAccountPage *self)
 {
   g_return_val_if_fail (MAIL_IS_ACCOUNT_PAGE (self), NULL);
   return adw_window_title_get_subtitle (self->header_title);
+}
+
+const char *
+_mail_account_page_get_description_for_test (MailAccountPage *self)
+{
+  g_return_val_if_fail (MAIL_IS_ACCOUNT_PAGE (self), NULL);
+  return adw_status_page_get_description (self->status_page);
 }
 
 static void
@@ -261,41 +283,57 @@ mail_account_page_init (MailAccountPage *self)
                                    GTK_WIDGET (self->header_title));
   adw_toolbar_view_add_top_bar (ADW_TOOLBAR_VIEW (toolbar), header);
 
-  GtkWidget *box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 18);
-  gtk_widget_set_halign (box, GTK_ALIGN_CENTER);
-  gtk_widget_set_valign (box, GTK_ALIGN_CENTER);
+  /* HIG: AdwStatusPage provides the centered/clamped layout pattern
+   * for full-pane "what's going on here" displays. We set description
+   * (live sync status) and child (the dynamic content) per state; the
+   * title is left unset because the header bar already identifies the
+   * account, and the icon-name is unset because the progress ring
+   * stands in for it when active. */
+  self->status_page = ADW_STATUS_PAGE (adw_status_page_new ());
+  adw_status_page_set_description (self->status_page, "");
+
+  GtkWidget *child = gtk_box_new (GTK_ORIENTATION_VERTICAL, 18);
+  gtk_widget_set_halign (child, GTK_ALIGN_CENTER);
 
   self->ring = MAIL_PROGRESS_RING (mail_progress_ring_new ());
   mail_progress_ring_set_size (self->ring, 120);
   gtk_widget_set_halign (GTK_WIDGET (self->ring), GTK_ALIGN_CENTER);
-  gtk_box_append (GTK_BOX (box), GTK_WIDGET (self->ring));
-
-  self->heading = GTK_LABEL (gtk_label_new (""));
-  gtk_widget_add_css_class (GTK_WIDGET (self->heading), "title-2");
-  gtk_box_append (GTK_BOX (box), GTK_WIDGET (self->heading));
-
-  self->status = GTK_LABEL (gtk_label_new (""));
-  gtk_widget_add_css_class (GTK_WIDGET (self->status), "dim-label");
-  gtk_box_append (GTK_BOX (box), GTK_WIDGET (self->status));
+  gtk_box_append (GTK_BOX (child), GTK_WIDGET (self->ring));
 
   self->eta_label = GTK_LABEL (gtk_label_new (""));
   gtk_widget_add_css_class (GTK_WIDGET (self->eta_label), "dim-label");
   gtk_widget_add_css_class (GTK_WIDGET (self->eta_label), "caption");
   gtk_widget_set_visible (GTK_WIDGET (self->eta_label), FALSE);
-  gtk_box_append (GTK_BOX (box), GTK_WIDGET (self->eta_label));
+  gtk_box_append (GTK_BOX (child), GTK_WIDGET (self->eta_label));
 
   /* 10-second sliding window — long enough to absorb per-message
    * jitter, short enough to react within a few seconds of a real
    * speed change. See mail-eta.h for the algorithm rationale. */
   self->eta = mail_eta_new (10 * G_USEC_PER_SEC);
 
+  /* Two mutually-exclusive action buttons live in the same slot;
+   * apply_render_mode toggles their visibility based on sync state.
+   * "Sync now" gets the suggested-action style — HIG's placeholder-
+   * page guidance explicitly recommends suggested for the primary
+   * action on a page like this. */
+  self->sync_button = GTK_BUTTON (gtk_button_new_with_label ("Sync now"));
+  gtk_widget_set_halign (GTK_WIDGET (self->sync_button), GTK_ALIGN_CENTER);
+  gtk_widget_add_css_class (GTK_WIDGET (self->sync_button), "suggested-action");
+  gtk_widget_add_css_class (GTK_WIDGET (self->sync_button), "pill");
+  g_signal_connect (self->sync_button, "clicked",
+                    G_CALLBACK (on_sync_clicked), self);
+  gtk_box_append (GTK_BOX (child), GTK_WIDGET (self->sync_button));
+
   self->cancel_button = GTK_BUTTON (gtk_button_new_with_label ("Cancel"));
   gtk_widget_set_halign (GTK_WIDGET (self->cancel_button), GTK_ALIGN_CENTER);
+  gtk_widget_add_css_class (GTK_WIDGET (self->cancel_button), "pill");
   g_signal_connect (self->cancel_button, "clicked",
                     G_CALLBACK (on_cancel_clicked), self);
-  gtk_box_append (GTK_BOX (box), GTK_WIDGET (self->cancel_button));
+  gtk_box_append (GTK_BOX (child), GTK_WIDGET (self->cancel_button));
 
-  adw_toolbar_view_set_content (ADW_TOOLBAR_VIEW (toolbar), box);
+  adw_status_page_set_child (self->status_page, child);
+  adw_toolbar_view_set_content (ADW_TOOLBAR_VIEW (toolbar),
+                                GTK_WIDGET (self->status_page));
   adw_navigation_page_set_child (ADW_NAVIGATION_PAGE (self), toolbar);
 }
 
@@ -304,4 +342,10 @@ mail_account_page_class_init (MailAccountPageClass *klass)
 {
   GObjectClass *object_class = G_OBJECT_CLASS (klass);
   object_class->dispose = mail_account_page_dispose;
+
+  signals[SIGNAL_SYNC_REQUESTED] = g_signal_new ("sync-requested",
+                                                 G_TYPE_FROM_CLASS (klass),
+                                                 G_SIGNAL_RUN_LAST,
+                                                 0, NULL, NULL, NULL,
+                                                 G_TYPE_NONE, 0);
 }
