@@ -96,6 +96,24 @@ test_folder_row_is_activatable (Fixture *f, gconstpointer ud)
 }
 
 static void
+test_folder_row_is_compact (Fixture *f, gconstpointer ud)
+{
+  /* Regression: folder rows used AdwActionRow's two-line layout
+   * (~52 px tall) which wasted vertical space in a list dominated by
+   * folder names. The fix replaces folder rows with a hand-rolled
+   * single-line GtkBox-in-GtkListBoxRow (~28-32 px). Assert the row's
+   * natural vertical request is well below the old 52 px so a
+   * regression to AdwActionRow would trip the bar. */
+  GtkListBox *list_box = _mail_sidebar_get_list_box_for_test (f->sidebar);
+  GtkListBoxRow *folder = gtk_list_box_get_row_at_index (list_box, 1);
+  g_assert_nonnull (folder);
+  int min = 0, nat = 0;
+  gtk_widget_measure (GTK_WIDGET (folder), GTK_ORIENTATION_VERTICAL, -1,
+                      &min, &nat, NULL, NULL);
+  g_assert_cmpint (nat, <, 40);
+}
+
+static void
 test_account_row_is_not_activatable (Fixture *f, gconstpointer ud)
 {
   /* Account rows are headers and must not respond to activation. */
@@ -247,6 +265,8 @@ main (int argc,
               Fixture, NULL, fixture_set_up, test_folders_populated, fixture_tear_down);
   g_test_add ("/sidebar/folder-row-activatable",
               Fixture, NULL, fixture_set_up, test_folder_row_is_activatable, fixture_tear_down);
+  g_test_add ("/sidebar/folder-row-compact",
+              Fixture, NULL, fixture_set_up, test_folder_row_is_compact, fixture_tear_down);
   g_test_add ("/sidebar/account-row-not-activatable",
               Fixture, NULL, fixture_set_up, test_account_row_is_not_activatable, fixture_tear_down);
   g_test_add ("/sidebar/folder-activation-emits-signal",

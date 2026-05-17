@@ -134,70 +134,102 @@ mail_sidebar_emit_refresh_for_button (MailSidebar *self,
   g_signal_emit (self, signals[SIGNAL_REFRESH_REQUESTED], 0, acct);
 }
 
+/* Account rows: AdwActionRow (one per account; provider icon prefix,
+ * identity title, provider-name subtitle, refresh-button suffix). */
+static GtkWidget *
+build_account_row (MailSidebarItem *it,
+                   MailSidebar *self)
+{
+  AdwActionRow *row = ADW_ACTION_ROW (adw_action_row_new ());
+  adw_preferences_row_set_use_markup (ADW_PREFERENCES_ROW (row), FALSE);
+  adw_preferences_row_set_title (ADW_PREFERENCES_ROW (row), it->title);
+  if (it->subtitle != NULL && it->subtitle[0] != '\0')
+    adw_action_row_set_subtitle (row, it->subtitle);
+
+  gtk_widget_add_css_class (GTK_WIDGET (row), "heading");
+  gtk_list_box_row_set_activatable (GTK_LIST_BOX_ROW (row), FALSE);
+  gtk_list_box_row_set_selectable (GTK_LIST_BOX_ROW (row), FALSE);
+
+  GtkWidget *image = NULL;
+  if (it->account != NULL && it->account->provider_icon != NULL)
+    {
+      g_autoptr (GIcon) gicon = g_icon_new_for_string (it->account->provider_icon, NULL);
+      if (gicon != NULL)
+        image = gtk_image_new_from_gicon (gicon);
+    }
+  if (image == NULL)
+    image = gtk_image_new_from_icon_name ("mail-symbolic");
+  gtk_image_set_pixel_size (GTK_IMAGE (image), 24);
+  adw_action_row_add_prefix (row, image);
+
+  GtkWidget *refresh = mail_refresh_button_new (it->account != NULL ? it->account->sync : NULL);
+  g_object_set_data (G_OBJECT (refresh), "mail-sidebar-account", it->account);
+  g_signal_connect_swapped (refresh, "clicked",
+                            G_CALLBACK (mail_sidebar_emit_refresh_for_button), self);
+  gtk_widget_set_valign (refresh, GTK_ALIGN_CENTER);
+  adw_action_row_add_suffix (row, refresh);
+
+  return GTK_WIDGET (row);
+}
+
+/* Folder rows: dense single-line GtkListBoxRow (~28-32 px tall) —
+ * folder icon + name + optional unread badge. The total-message count
+ * lives in the row tooltip rather than a subtitle. */
+static GtkWidget *
+build_folder_row (MailSidebarItem *it)
+{
+  GtkWidget *box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
+  gtk_widget_set_margin_top (box, 4);
+  gtk_widget_set_margin_bottom (box, 4);
+  gtk_widget_set_margin_start (box, 12);
+  gtk_widget_set_margin_end (box, 6);
+
+  GtkWidget *image = gtk_image_new_from_icon_name ("folder-symbolic");
+  gtk_image_set_pixel_size (GTK_IMAGE (image), 16);
+  gtk_box_append (GTK_BOX (box), image);
+
+  GtkWidget *label = gtk_label_new (it->title);
+  gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+  gtk_label_set_ellipsize (GTK_LABEL (label), PANGO_ELLIPSIZE_END);
+  gtk_label_set_use_markup (GTK_LABEL (label), FALSE);
+  gtk_widget_set_hexpand (label, TRUE);
+  if (it->unread > 0)
+    gtk_widget_add_css_class (label, "heading");
+  gtk_box_append (GTK_BOX (box), label);
+
+  if (it->unread > 0)
+    {
+      char buf[16];
+      g_snprintf (buf, sizeof buf, "%d", it->unread);
+      GtkWidget *badge = gtk_label_new (buf);
+      gtk_widget_add_css_class (badge, "numeric");
+      gtk_widget_add_css_class (badge, "caption");
+      gtk_widget_add_css_class (badge, "dim-label");
+      gtk_box_append (GTK_BOX (box), badge);
+    }
+
+  GtkWidget *row = gtk_list_box_row_new ();
+  gtk_list_box_row_set_activatable (GTK_LIST_BOX_ROW (row), TRUE);
+  gtk_list_box_row_set_child (GTK_LIST_BOX_ROW (row), box);
+
+  if (it->subtitle != NULL && it->subtitle[0] != '\0')
+    {
+      g_autofree char *tip = g_strdup_printf ("%s messages", it->subtitle);
+      gtk_widget_set_tooltip_text (row, tip);
+    }
+
+  return row;
+}
+
 static GtkWidget *
 build_row_widget (gpointer item,
                   gpointer user_data)
 {
   MailSidebarItem *it = MAIL_SIDEBAR_ITEM (item);
-  AdwActionRow *row = ADW_ACTION_ROW (adw_action_row_new ());
-
-  /* See mail-message-list.c: account identities and folder names are
-   * literal text, never Pango markup. */
-  adw_preferences_row_set_use_markup (ADW_PREFERENCES_ROW (row), FALSE);
-
-  adw_preferences_row_set_title (ADW_PREFERENCES_ROW (row), it->title);
-  if (it->subtitle != NULL && it->subtitle[0] != '\0')
-    adw_action_row_set_subtitle (row, it->subtitle);
-
+  MailSidebar *self = user_data;
   if (it->kind == MAIL_SIDEBAR_ITEM_ACCOUNT)
-    {
-      gtk_widget_add_css_class (GTK_WIDGET (row), "heading");
-      gtk_list_box_row_set_activatable (GTK_LIST_BOX_ROW (row), FALSE);
-      gtk_list_box_row_set_selectable (GTK_LIST_BOX_ROW (row), FALSE);
-
-      GtkWidget *image = NULL;
-      if (it->account != NULL && it->account->provider_icon != NULL)
-        {
-          g_autoptr (GIcon) gicon = g_icon_new_for_string (it->account->provider_icon, NULL);
-          if (gicon != NULL)
-            image = gtk_image_new_from_gicon (gicon);
-        }
-      if (image == NULL)
-        image = gtk_image_new_from_icon_name ("mail-symbolic");
-      gtk_image_set_pixel_size (GTK_IMAGE (image), 24);
-      adw_action_row_add_prefix (row, image);
-
-      /* Refresh button. Disabled for test accounts (no sync). */
-      MailSidebar *self = user_data;
-      GtkWidget *refresh = mail_refresh_button_new (it->account != NULL ? it->account->sync : NULL);
-      g_object_set_data (G_OBJECT (refresh), "mail-sidebar-account", it->account);
-      g_signal_connect_swapped (refresh, "clicked",
-                                G_CALLBACK (mail_sidebar_emit_refresh_for_button), self);
-      gtk_widget_set_valign (refresh, GTK_ALIGN_CENTER);
-      adw_action_row_add_suffix (row, refresh);
-    }
-  else
-    {
-      /* AdwActionRow defaults to activatable=FALSE (no activatable-widget
-       * is set), which suppresses GtkListBox::row-activated. Folder rows
-       * must opt in explicitly so single-click navigation works. */
-      gtk_list_box_row_set_activatable (GTK_LIST_BOX_ROW (row), TRUE);
-      gtk_widget_set_margin_start (GTK_WIDGET (row), 12);
-      GtkWidget *image = gtk_image_new_from_icon_name ("folder-symbolic");
-      adw_action_row_add_prefix (row, image);
-
-      if (it->unread > 0)
-        {
-          char buf[16];
-          g_snprintf (buf, sizeof buf, "%d", it->unread);
-          GtkWidget *badge = gtk_label_new (buf);
-          gtk_widget_add_css_class (badge, "numeric");
-          gtk_widget_add_css_class (badge, "caption");
-          adw_action_row_add_suffix (row, badge);
-        }
-    }
-
-  return GTK_WIDGET (row);
+    return build_account_row (it, self);
+  return build_folder_row (it);
 }
 
 static void
