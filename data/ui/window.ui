@@ -15,9 +15,14 @@
     <property name="content">
       <object class="AdwOverlaySplitView" id="split_view">
         <property name="show-sidebar">True</property>
-        <property name="min-sidebar-width">200</property>
+        <!-- min raised from 200 so the account identity fits at default
+             window widths; fraction bumped so the typical 1100 px window
+             gives the sidebar ~352 px (enough for a 20-30 char email
+             without the title ever ellipsizing). The 550sp breakpoint
+             still collapses the sidebar on phone-shaped windows. -->
+        <property name="min-sidebar-width">280</property>
         <property name="max-sidebar-width">480</property>
-        <property name="sidebar-width-fraction">0.28</property>
+        <property name="sidebar-width-fraction">0.32</property>
         <property name="sidebar">
           <object class="AdwNavigationPage">
             <property name="title">Mail</property>

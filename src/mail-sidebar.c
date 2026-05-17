@@ -147,8 +147,8 @@ build_account_row (MailSidebarItem *it,
   GtkWidget *box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
   gtk_widget_set_margin_top (box, 6);
   gtk_widget_set_margin_bottom (box, 6);
-  gtk_widget_set_margin_start (box, 12);
-  gtk_widget_set_margin_end (box, 6);
+  gtk_widget_set_margin_start (box, 6);
+  gtk_widget_set_margin_end (box, 3);
 
   GtkWidget *image = NULL;
   if (it->account != NULL && it->account->provider_icon != NULL)
@@ -163,9 +163,12 @@ build_account_row (MailSidebarItem *it,
   gtk_widget_set_valign (image, GTK_ALIGN_CENTER);
   gtk_box_append (GTK_BOX (box), image);
 
-  /* Title + subtitle vbox. No ellipsize and no single-line cap — the
-   * user wants the full identity visible; if the sidebar is dragged
-   * narrow enough to overflow, the title wraps rather than truncates. */
+  /* Title + subtitle vbox. Single-line (no wrap) so we never get the
+   * ugly mid-word hyphen break. Ellipsize-end only kicks in if the
+   * sidebar is dragged below the width that fits a typical identity;
+   * the tooltip then surfaces the full address. The sidebar's default
+   * width (set in window.ui via sidebar-width-fraction) is sized so a
+   * normal 20-30 char email shows in full without truncation. */
   GtkWidget *vbox = gtk_box_new (GTK_ORIENTATION_VERTICAL, 2);
   gtk_widget_set_hexpand (vbox, TRUE);
   gtk_widget_set_valign (vbox, GTK_ALIGN_CENTER);
@@ -173,8 +176,10 @@ build_account_row (MailSidebarItem *it,
   GtkWidget *title = gtk_label_new (it->title);
   gtk_label_set_xalign (GTK_LABEL (title), 0.0);
   gtk_label_set_use_markup (GTK_LABEL (title), FALSE);
-  gtk_label_set_wrap (GTK_LABEL (title), TRUE);
-  gtk_label_set_wrap_mode (GTK_LABEL (title), PANGO_WRAP_WORD_CHAR);
+  gtk_label_set_wrap (GTK_LABEL (title), FALSE);
+  gtk_label_set_single_line_mode (GTK_LABEL (title), TRUE);
+  gtk_label_set_ellipsize (GTK_LABEL (title), PANGO_ELLIPSIZE_END);
+  gtk_widget_set_tooltip_text (title, it->title);
   gtk_widget_add_css_class (title, "heading");
   gtk_box_append (GTK_BOX (vbox), title);
 
@@ -183,6 +188,9 @@ build_account_row (MailSidebarItem *it,
       GtkWidget *subtitle = gtk_label_new (it->subtitle);
       gtk_label_set_xalign (GTK_LABEL (subtitle), 0.0);
       gtk_label_set_use_markup (GTK_LABEL (subtitle), FALSE);
+      gtk_label_set_wrap (GTK_LABEL (subtitle), FALSE);
+      gtk_label_set_single_line_mode (GTK_LABEL (subtitle), TRUE);
+      gtk_label_set_ellipsize (GTK_LABEL (subtitle), PANGO_ELLIPSIZE_END);
       gtk_widget_add_css_class (subtitle, "caption");
       gtk_widget_add_css_class (subtitle, "dim-label");
       gtk_box_append (GTK_BOX (vbox), subtitle);
@@ -212,8 +220,8 @@ build_folder_row (MailSidebarItem *it)
   GtkWidget *box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
   gtk_widget_set_margin_top (box, 4);
   gtk_widget_set_margin_bottom (box, 4);
-  gtk_widget_set_margin_start (box, 12);
-  gtk_widget_set_margin_end (box, 6);
+  gtk_widget_set_margin_start (box, 6);
+  gtk_widget_set_margin_end (box, 3);
 
   GtkWidget *image = gtk_image_new_from_icon_name ("folder-symbolic");
   gtk_image_set_pixel_size (GTK_IMAGE (image), 16);
