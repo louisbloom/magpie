@@ -1,13 +1,17 @@
 /* mail-message-list.c - Message list pane.
  *
- * Backed by a GtkListBox with .navigation-sidebar styling, bound to a
- * GListStore of MailMessageRowItem GObjects. Each row item holds a
- * borrowed `const MailMessageMeta*` that points into the backend's
- * arena; the items are valid until the next load on the same backend
+ * Backed by a GtkListView fed from a GListStore of MailMessageRowItem
+ * GObjects. GtkListView virtualises: only the rows in the visible
+ * viewport (plus a small scroll buffer) are ever constructed, so the
+ * model can grow to tens of thousands of items without paying a
+ * widget-per-row cost. Each row item holds a borrowed
+ * `const MailMessageMeta*` that points into the backend's arena and
+ * is valid until the next load on the same backend
  * (per [[feedback-memory-reuse]]).
  *
- * States are surfaced through a GtkStack: "empty" (no folder
- * selected), "loading" (spinner), and "list" (messages).
+ * States are surfaced through a GtkStack: "empty" (no folder selected),
+ * "loading" (transient), "folder-empty" (folder selected, zero rows),
+ * and "list" (populated).
  */
 
 #include "config.h"
@@ -15,7 +19,6 @@
 #include "mail-message-list.h"
 
 #include <adwaita.h>
-#include <string.h>
 
 #define MAIL_TYPE_MESSAGE_ROW_ITEM (mail_message_row_item_get_type ())
 G_DECLARE_FINAL_TYPE (MailMessageRowItem, mail_message_row_item, MAIL, MESSAGE_ROW_ITEM, GObject)
@@ -63,8 +66,9 @@ struct _MailMessageList
 
   GtkStack *stack;
   GtkScrolledWindow *scroller; /* borrowed; lives inside stack as the "list" page */
-  GtkListBox *list_box;
+  GtkListView *list_view;
   GListStore *store;
+  GtkNoSelection *selection;
 
   /* Current in-flight load. We hold an owned ref to the backend's
    * GoaObject-equivalent? No — we just hold a borrowed pointer to the
@@ -88,59 +92,119 @@ format_received (gint64 received_unix)
   return same_day ? g_date_time_format (when, "%H:%M") : g_date_time_format (when, "%b %e");
 }
 
-static GtkWidget *
-build_row_widget (gpointer item,
-                  gpointer user_data)
+/* --- factory: setup/bind/unbind for recyclable row widgets ----- */
+
+/* AdwActionRow is a GtkListBoxRow subclass and asserts its parent is a
+ * GtkListBox when grabbing focus — fatal under GtkListView. So we hand-
+ * roll a row widget: an hbox containing a vbox of [title, subtitle] and
+ * a trailing badge label. Subjects/froms are set as plain text via
+ * gtk_label_set_text (NOT set_markup), which handles '<','>','&','@'. */
+static void
+factory_setup (GtkSignalListItemFactory *factory,
+               GtkListItem *list_item,
+               gpointer user_data)
 {
-  MailMessageRowItem *row_item = MAIL_MESSAGE_ROW_ITEM (item);
-  const MailMessageMeta *m = row_item->meta;
+  GtkWidget *hbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 12);
+  gtk_widget_set_margin_top (hbox, 6);
+  gtk_widget_set_margin_bottom (hbox, 6);
+  gtk_widget_set_margin_start (hbox, 12);
+  gtk_widget_set_margin_end (hbox, 12);
 
-  AdwActionRow *row = ADW_ACTION_ROW (adw_action_row_new ());
+  GtkWidget *vbox = gtk_box_new (GTK_ORIENTATION_VERTICAL, 2);
+  gtk_widget_set_hexpand (vbox, TRUE);
 
-  /* AdwActionRow renders title and subtitle as Pango markup by default,
-   * so a raw subject like "X & Y" or a "Name <addr@host>" subtitle
-   * triggers markup-parse warnings (and produces garbled text). Mail
-   * subjects and addresses are arbitrary user text; treat them as
-   * literal characters. */
-  adw_preferences_row_set_use_markup (ADW_PREFERENCES_ROW (row), FALSE);
+  GtkWidget *title = gtk_label_new (NULL);
+  gtk_label_set_xalign (GTK_LABEL (title), 0.0);
+  gtk_label_set_ellipsize (GTK_LABEL (title), PANGO_ELLIPSIZE_END);
+  gtk_label_set_single_line_mode (GTK_LABEL (title), TRUE);
+  gtk_box_append (GTK_BOX (vbox), title);
 
-  /* AdwActionRow defaults to activatable=FALSE unless an activatable-
-   * widget is set. Same fix as the sidebar's folder rows: opt in
-   * explicitly so GtkListBox::row-activated fires on click. */
-  gtk_list_box_row_set_activatable (GTK_LIST_BOX_ROW (row), TRUE);
+  GtkWidget *subtitle = gtk_label_new (NULL);
+  gtk_label_set_xalign (GTK_LABEL (subtitle), 0.0);
+  gtk_label_set_ellipsize (GTK_LABEL (subtitle), PANGO_ELLIPSIZE_END);
+  gtk_label_set_single_line_mode (GTK_LABEL (subtitle), TRUE);
+  gtk_widget_add_css_class (subtitle, "caption");
+  gtk_widget_add_css_class (subtitle, "dim-label");
+  gtk_box_append (GTK_BOX (vbox), subtitle);
 
-  const char *subject = (m->subject != NULL && m->subject[0] != '\0') ? m->subject : "(no subject)";
-  adw_preferences_row_set_title (ADW_PREFERENCES_ROW (row), subject);
+  gtk_box_append (GTK_BOX (hbox), vbox);
 
-  g_autofree char *date_str = format_received (m->received_unix);
-  g_autofree char *subtitle = NULL;
-  if (m->from != NULL && date_str[0] != '\0')
-    subtitle = g_strdup_printf ("%s · %s", m->from, date_str);
-  else if (m->from != NULL)
-    subtitle = g_strdup (m->from);
-  else
-    subtitle = g_strdup (date_str);
-  adw_action_row_set_subtitle (row, subtitle);
+  GtkWidget *badge = gtk_label_new (NULL);
+  gtk_widget_add_css_class (badge, "numeric");
+  gtk_widget_add_css_class (badge, "caption");
+  gtk_widget_add_css_class (badge, "dim-label");
+  gtk_widget_set_visible (badge, FALSE);
+  gtk_box_append (GTK_BOX (hbox), badge);
 
-  if (m->unread)
-    gtk_widget_add_css_class (GTK_WIDGET (row), "heading");
+  g_object_set_data (G_OBJECT (hbox), "mail-title", title);
+  g_object_set_data (G_OBJECT (hbox), "mail-subtitle", subtitle);
+  g_object_set_data (G_OBJECT (hbox), "mail-badge", badge);
 
-  return GTK_WIDGET (row);
+  gtk_list_item_set_child (list_item, hbox);
 }
 
 static void
-on_row_activated (GtkListBox *list_box,
-                  GtkListBoxRow *row,
-                  gpointer user_data)
+factory_bind (GtkSignalListItemFactory *factory,
+              GtkListItem *list_item,
+              gpointer user_data)
+{
+  GtkWidget *row = gtk_list_item_get_child (list_item);
+  MailMessageRowItem *item = MAIL_MESSAGE_ROW_ITEM (gtk_list_item_get_item (list_item));
+  const MailMessageMeta *m = item->meta;
+
+  GtkLabel *title = g_object_get_data (G_OBJECT (row), "mail-title");
+  GtkLabel *subtitle = g_object_get_data (G_OBJECT (row), "mail-subtitle");
+  GtkWidget *badge = g_object_get_data (G_OBJECT (row), "mail-badge");
+
+  const char *subject = (m->subject != NULL && m->subject[0] != '\0') ? m->subject : "(no subject)";
+  gtk_label_set_text (title, subject);
+
+  g_autofree char *date_str = format_received (m->received_unix);
+  g_autofree char *subtitle_str = NULL;
+  if (m->from != NULL && date_str[0] != '\0')
+    subtitle_str = g_strdup_printf ("%s · %s", m->from, date_str);
+  else if (m->from != NULL)
+    subtitle_str = g_strdup (m->from);
+  else
+    subtitle_str = g_strdup (date_str);
+  gtk_label_set_text (subtitle, subtitle_str);
+
+  /* unread is a boolean; use bold "heading" style on the title as the
+   * indicator. The badge slot stays wired for a future per-row value. */
+  gtk_widget_set_visible (badge, FALSE);
+
+  if (m->unread)
+    gtk_widget_add_css_class (GTK_WIDGET (title), "heading");
+  else
+    gtk_widget_remove_css_class (GTK_WIDGET (title), "heading");
+}
+
+static void
+factory_unbind (GtkSignalListItemFactory *factory,
+                GtkListItem *list_item,
+                gpointer user_data)
+{
+  GtkWidget *row = gtk_list_item_get_child (list_item);
+  GtkWidget *title = g_object_get_data (G_OBJECT (row), "mail-title");
+  gtk_widget_remove_css_class (title, "heading");
+}
+
+/* --- activation ------------------------------------------------- */
+
+static void
+on_list_view_activate (GtkListView *list_view,
+                       guint position,
+                       gpointer user_data)
 {
   MailMessageList *self = MAIL_MESSAGE_LIST (user_data);
-  guint index = gtk_list_box_row_get_index (row);
-  g_autoptr (MailMessageRowItem) item = g_list_model_get_item (G_LIST_MODEL (self->store), index);
+  g_autoptr (MailMessageRowItem) item = g_list_model_get_item (G_LIST_MODEL (self->store), position);
   if (item == NULL)
     return;
   g_signal_emit (self, signals[SIGNAL_MESSAGE_ACTIVATED], 0,
                  self->current_backend, item->meta->id, item->meta->subject);
 }
+
+/* --- load -------------------------------------------------------- */
 
 typedef struct
 {
@@ -188,8 +252,7 @@ on_messages_loaded (GObject *source,
 void
 mail_message_list_load (MailMessageList *self,
                         MailBackend *backend,
-                        const char *folder_id,
-                        int top_n)
+                        const char *folder_id)
 {
   g_return_if_fail (MAIL_IS_MESSAGE_LIST (self));
   g_return_if_fail (backend != NULL);
@@ -206,7 +269,10 @@ mail_message_list_load (MailMessageList *self,
   LoadMessagesCtx *ctx = g_new (LoadMessagesCtx, 1);
   ctx->self = g_object_ref (self);
   ctx->backend = backend;
-  mail_backend_list_messages_async (backend, folder_id, top_n,
+  /* G_MAXINT → SQL LIMIT effectively unbounded; the messages_folder_
+   * received index keeps cost O(rows_returned). GtkListView's
+   * virtualisation absorbs any model size. */
+  mail_backend_list_messages_async (backend, folder_id, G_MAXINT,
                                     self->cancellable,
                                     on_messages_loaded, ctx);
 }
@@ -217,11 +283,18 @@ mail_message_list_new (void)
   return g_object_new (MAIL_TYPE_MESSAGE_LIST, NULL);
 }
 
-GtkListBox *
-_mail_message_list_get_list_box_for_test (MailMessageList *self)
+GtkListView *
+_mail_message_list_get_list_view_for_test (MailMessageList *self)
 {
   g_return_val_if_fail (MAIL_IS_MESSAGE_LIST (self), NULL);
-  return self->list_box;
+  return self->list_view;
+}
+
+GListModel *
+_mail_message_list_get_model_for_test (MailMessageList *self)
+{
+  g_return_val_if_fail (MAIL_IS_MESSAGE_LIST (self), NULL);
+  return G_LIST_MODEL (self->store);
 }
 
 GtkStack *
@@ -285,13 +358,9 @@ mail_message_list_init (MailMessageList *self)
   adw_status_page_set_description (empty, "Choose an account and folder in the sidebar.");
   gtk_stack_add_named (self->stack, GTK_WIDGET (empty), "empty");
 
-  /* "loading" — kept deliberately simple. An earlier version embedded
-   * an AdwSpinner via adw_status_page_set_child plus set_paintable(NULL);
-   * that combination kept queuing snapshots while the stack page was
-   * unmapped and produced
-   *   Gtk-WARNING: Trying to snapshot GtkGizmo without a current allocation
-   * on every redraw cycle. A static title is enough — the load is
-   * usually under half a second. */
+  /* "loading" — kept deliberately simple. A static title is enough; the
+   * load is usually under half a second. (Earlier AdwSpinner experiments
+   * tripped Gtk-WARNING snapshots; see git log if needed.) */
   AdwStatusPage *loading = ADW_STATUS_PAGE (adw_status_page_new ());
   adw_status_page_set_title (loading, "Loading messages…");
   gtk_stack_add_named (self->stack, GTK_WIDGET (loading), "loading");
@@ -305,29 +374,34 @@ mail_message_list_init (MailMessageList *self)
   adw_status_page_set_description (folder_empty, "This folder is empty.");
   gtk_stack_add_named (self->stack, GTK_WIDGET (folder_empty), "folder-empty");
 
-  /* "list"
+  /* "list" — virtualising GtkListView inside a scroller.
    *
-   * Vertical scroll AUTOMATIC; horizontal stays NEVER (rows don't
-   * overflow). Critically: propagate-natural-{width,height}=FALSE so
-   * the GtkListBox's full row-count natural height (50 rows × 52 px ≈
-   * 2600 px) does NOT flow upward through this scroller and through
-   * GtkStack's vhomogeneous=TRUE max-of-children measure — the
-   * AdwOverlaySplitView would otherwise warn about exceeding the
-   * window height on every relayout. Overlay scrolling stays off so
-   * the scrollbar doesn't fade-animate. */
+   * Scroller policy/propagate notes are unchanged from the GtkListBox
+   * era: propagate-natural-{width,height}=FALSE so the list view's
+   * natural size doesn't escape into AdwOverlaySplitView's measure
+   * pass (a 10k-row natural would warn about exceeding window height
+   * on every relayout). Overlay scrolling stays off so the scrollbar
+   * doesn't fade-animate. */
   self->scroller = GTK_SCROLLED_WINDOW (gtk_scrolled_window_new ());
   gtk_scrolled_window_set_policy (self->scroller,
                                   GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
   gtk_scrolled_window_set_overlay_scrolling (self->scroller, FALSE);
   gtk_scrolled_window_set_propagate_natural_width (self->scroller, FALSE);
   gtk_scrolled_window_set_propagate_natural_height (self->scroller, FALSE);
-  self->list_box = GTK_LIST_BOX (gtk_list_box_new ());
-  gtk_widget_add_css_class (GTK_WIDGET (self->list_box), "navigation-sidebar");
-  gtk_list_box_bind_model (self->list_box, G_LIST_MODEL (self->store),
-                           build_row_widget, self, NULL);
-  g_signal_connect (self->list_box, "row-activated",
-                    G_CALLBACK (on_row_activated), self);
-  gtk_scrolled_window_set_child (self->scroller, GTK_WIDGET (self->list_box));
+
+  GtkListItemFactory *factory = gtk_signal_list_item_factory_new ();
+  g_signal_connect (factory, "setup", G_CALLBACK (factory_setup), self);
+  g_signal_connect (factory, "bind", G_CALLBACK (factory_bind), self);
+  g_signal_connect (factory, "unbind", G_CALLBACK (factory_unbind), self);
+
+  self->selection = GTK_NO_SELECTION (gtk_no_selection_new (G_LIST_MODEL (g_object_ref (self->store))));
+  self->list_view = GTK_LIST_VIEW (gtk_list_view_new (GTK_SELECTION_MODEL (self->selection), factory));
+  gtk_list_view_set_single_click_activate (self->list_view, TRUE);
+  gtk_widget_add_css_class (GTK_WIDGET (self->list_view), "navigation-sidebar");
+  g_signal_connect (self->list_view, "activate",
+                    G_CALLBACK (on_list_view_activate), self);
+
+  gtk_scrolled_window_set_child (self->scroller, GTK_WIDGET (self->list_view));
   gtk_stack_add_named (self->stack, GTK_WIDGET (self->scroller), "list");
 
   gtk_stack_set_visible_child_name (self->stack, "empty");

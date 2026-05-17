@@ -1,19 +1,16 @@
 /* tests/test-message-list.c - MailMessageList regression tests.
  *
- * Drives the real MailMessageList widget with the fake backend so
- * gtk_list_box_bind_model runs the production row factory. A custom
+ * Drives the real MailMessageList widget with the fake backend so the
+ * GtkListView factory runs the production setup/bind path. A custom
  * GLib log writer counts any "markup" warning that fires during the
  * test; the markup-safety regression asserts the count is zero after
  * loading messages whose subjects and from-fields contain Pango
  * markup-trippy characters (& < > @).
  *
- * Production trigger that motivated this test:
- *   "Failed to set text 'Wise <noreply@wise.com> · 12:21' from markup
- *    due to error parsing markup: ... 'noreply@wise.com' is not a
- *    valid name: '@'"
- * AdwActionRow renders title/subtitle as Pango markup by default, so
- * the fix is adw_preferences_row_set_use_markup(row, FALSE) on every
- * row built in mail-message-list.c::build_row_widget.
+ * The original production trigger ("Failed to set text ... from markup
+ * due to error parsing markup ...") came from AdwActionRow rendering
+ * its title/subtitle as Pango markup. The current factory uses plain
+ * GtkLabels with gtk_label_set_text, so the markup path is never taken.
  */
 
 #include "mail-backend-fake.h"
@@ -76,7 +73,7 @@ fixture_set_up (Fixture *f, gconstpointer ud)
   f->list = MAIL_MESSAGE_LIST (mail_message_list_new ());
   g_object_ref_sink (f->list);
 
-  mail_message_list_load (f->list, f->fake, "inbox", 10);
+  mail_message_list_load (f->list, f->fake, "inbox");
   pump_main_loop ();
 }
 
@@ -91,26 +88,20 @@ fixture_tear_down (Fixture *f, gconstpointer ud)
 static void
 test_rows_populated (Fixture *f, gconstpointer ud)
 {
-  GtkListBox *list_box = _mail_message_list_get_list_box_for_test (f->list);
-  g_assert_nonnull (list_box);
-  for (int i = 0; i < 3; i++)
-    g_assert_nonnull (gtk_list_box_get_row_at_index (list_box, i));
-  g_assert_null (gtk_list_box_get_row_at_index (list_box, 3));
+  GListModel *model = _mail_message_list_get_model_for_test (f->list);
+  g_assert_nonnull (model);
+  g_assert_cmpuint (g_list_model_get_n_items (model), ==, 3);
 }
 
 static void
-test_row_is_activatable (Fixture *f, gconstpointer ud)
+test_single_click_activates (Fixture *f, gconstpointer ud)
 {
-  /* Regression: AdwActionRow defaults to activatable=FALSE. Without
-   * an explicit opt-in, clicking a message row was a no-op. Same
-   * class of bug as the sidebar's folder-row-activatable regression. */
-  GtkListBox *list_box = _mail_message_list_get_list_box_for_test (f->list);
-  for (int i = 0; i < 3; i++)
-    {
-      GtkListBoxRow *row = gtk_list_box_get_row_at_index (list_box, i);
-      g_assert_nonnull (row);
-      g_assert_true (gtk_list_box_row_get_activatable (row));
-    }
+  /* Regression: under GtkListView we use single-click-activate, the
+   * equivalent of the previous "AdwActionRow must be activatable"
+   * fix on the GtkListBox path. */
+  GtkListView *list_view = _mail_message_list_get_list_view_for_test (f->list);
+  g_assert_nonnull (list_view);
+  g_assert_true (gtk_list_view_get_single_click_activate (list_view));
 }
 
 typedef struct
@@ -144,11 +135,12 @@ test_activation_emits_signal (Fixture *f, gconstpointer ud)
   gulong handler = g_signal_connect (f->list, "message-activated",
                                      G_CALLBACK (on_message_activated), &cap);
 
-  GtkListBox *list_box = _mail_message_list_get_list_box_for_test (f->list);
-  GtkListBoxRow *first = gtk_list_box_get_row_at_index (list_box, 0);
-  g_assert_nonnull (first);
-
-  g_signal_emit_by_name (list_box, "row-activated", first);
+  GtkListView *list_view = _mail_message_list_get_list_view_for_test (f->list);
+  g_assert_nonnull (list_view);
+  /* GtkListView::activate carries a position; the handler in
+   * mail-message-list looks up the model item and emits
+   * message-activated. */
+  g_signal_emit_by_name (list_view, "activate", 0u);
 
   g_assert_cmpuint (cap.count, ==, 1);
   g_assert_cmpstr (cap.message_id, ==, "m1");
@@ -158,6 +150,89 @@ test_activation_emits_signal (Fixture *f, gconstpointer ud)
   g_signal_handler_disconnect (f->list, handler);
   g_free (cap.message_id);
   g_free (cap.subject);
+}
+
+static void
+test_large_folder_virtualises_rows (Fixture *f, gconstpointer ud)
+{
+  /* Regression: the prior GtkListBox + bind_model path instantiated a
+   * widget per model item. With 10k-item inboxes that's catastrophic.
+   * GtkListView only realises rows in the visible viewport plus a
+   * small scroll buffer. Seed 5000 messages, load, present in a small
+   * window, and assert the model holds 5000 but the list view only
+   * realised a small constant number of row widgets. */
+  GArray *specs = g_array_new (FALSE, FALSE, sizeof (FakeMessageSpec));
+  GPtrArray *strings = g_ptr_array_new_with_free_func (g_free);
+  for (int i = 0; i < 5000; i++)
+    {
+      char *id = g_strdup_printf ("m%04d", i);
+      char *subj = g_strdup_printf ("Subject %04d", i);
+      g_ptr_array_add (strings, id);
+      g_ptr_array_add (strings, subj);
+      FakeMessageSpec spec = {
+        .id = id,
+        .subject = subj,
+        .from = "a@b.c",
+        .received_unix = 1700000000 + i,
+        .unread = FALSE,
+        .raw_rfc822 = "x",
+      };
+      g_array_append_val (specs, spec);
+    }
+  MailBackend *fake = mail_backend_fake_new ();
+  mail_backend_fake_set_messages (fake, "big", (FakeMessageSpec *) specs->data, specs->len);
+
+  MailMessageList *list = MAIL_MESSAGE_LIST (mail_message_list_new ());
+  g_object_ref_sink (list);
+
+  /* Present in a real window so the GtkListView actually allocates and
+   * realises the viewport. */
+  GtkWidget *window = gtk_window_new ();
+  gtk_window_set_default_size (GTK_WINDOW (window), 600, 480);
+  gtk_window_set_child (GTK_WINDOW (window), GTK_WIDGET (list));
+  gtk_window_present (GTK_WINDOW (window));
+  pump_main_loop ();
+
+  mail_message_list_load (list, fake, "big");
+  pump_main_loop ();
+
+  GListModel *model = _mail_message_list_get_model_for_test (list);
+  g_assert_cmpuint (g_list_model_get_n_items (model), ==, 5000);
+
+  /* Walk the list view's subtree and count hboxes that match the
+   * factory's distinctive layout (have the "mail-title" widget data
+   * set). With virtualisation a 5000-item model only realises the
+   * visible viewport + a small overscan buffer. */
+  guint realised = 0;
+  GQueue stack = G_QUEUE_INIT;
+  g_queue_push_tail (&stack, gtk_widget_get_first_child (GTK_WIDGET (_mail_message_list_get_list_view_for_test (list))));
+  while (!g_queue_is_empty (&stack))
+    {
+      GtkWidget *w = g_queue_pop_head (&stack);
+      while (w != NULL)
+        {
+          if (g_object_get_data (G_OBJECT (w), "mail-title") != NULL)
+            realised++;
+          GtkWidget *c = gtk_widget_get_first_child (w);
+          if (c != NULL)
+            g_queue_push_tail (&stack, c);
+          w = gtk_widget_get_next_sibling (w);
+        }
+    }
+  g_queue_clear (&stack);
+  /* Confirmed in-session: virtualised count ≈ 205 for a 600×480 window;
+   * any plausible viewport+overscan stays well under 500. A regression
+   * to GtkListBox+bind_model would realise 5000. */
+  g_assert_cmpuint (realised, >, 0);
+  g_assert_cmpuint (realised, <, 500);
+
+  gtk_window_destroy (GTK_WINDOW (window));
+  pump_main_loop ();
+  g_object_unref (list);
+  pump_main_loop ();
+  mail_backend_destroy (fake);
+  g_array_unref (specs);
+  g_ptr_array_unref (strings);
 }
 
 static void
@@ -183,7 +258,7 @@ test_no_warnings_when_realized_and_snapshotted (Fixture *f, gconstpointer ud)
   gtk_window_present (GTK_WINDOW (window));
   pump_main_loop ();
 
-  mail_message_list_load (f->list, f->fake, "inbox", 10);
+  mail_message_list_load (f->list, f->fake, "inbox");
   pump_main_loop ();
 
   gtk_window_destroy (GTK_WINDOW (window));
@@ -206,7 +281,7 @@ test_empty_folder_shows_folder_empty_state (void)
   MailMessageList *list = MAIL_MESSAGE_LIST (mail_message_list_new ());
   g_object_ref_sink (list);
 
-  mail_message_list_load (list, fake, "empty-folder", 10);
+  mail_message_list_load (list, fake, "empty-folder");
   pump_main_loop ();
 
   GtkStack *stack = _mail_message_list_get_stack_for_test (list);
@@ -238,18 +313,25 @@ test_markup_special_chars (void)
   MailMessageList *list = MAIL_MESSAGE_LIST (mail_message_list_new ());
   g_object_ref_sink (list);
 
-  mail_message_list_load (list, fake, "inbox", G_N_ELEMENTS (msgs));
+  mail_message_list_load (list, fake, "inbox");
   pump_main_loop ();
 
-  /* The list must have built rows for every message. */
-  GtkListBox *list_box = _mail_message_list_get_list_box_for_test (list);
-  g_assert_nonnull (list_box);
-  for (guint i = 0; i < G_N_ELEMENTS (msgs); i++)
-    g_assert_nonnull (gtk_list_box_get_row_at_index (list_box, (int) i));
+  /* The model must have one item per message. */
+  GListModel *model = _mail_message_list_get_model_for_test (list);
+  g_assert_nonnull (model);
+  g_assert_cmpuint (g_list_model_get_n_items (model), ==, G_N_ELEMENTS (msgs));
 
   /* And the row factory must not have tripped any markup-parse
-   * warnings while building those rows. */
+   * warnings while binding those rows. To exercise the bind callback
+   * we need the list view to realise rows — map it in a window. */
+  GtkWidget *window = gtk_window_new ();
+  gtk_window_set_default_size (GTK_WINDOW (window), 400, 400);
+  gtk_window_set_child (GTK_WINDOW (window), GTK_WIDGET (list));
+  gtk_window_present (GTK_WINDOW (window));
+  pump_main_loop ();
   g_assert_cmpuint (markup_warnings, ==, 0);
+  gtk_window_destroy (GTK_WINDOW (window));
+  pump_main_loop ();
 
   g_object_unref (list);
   pump_main_loop ();
@@ -269,10 +351,12 @@ main (int argc,
 
   g_test_add ("/message-list/rows-populated",
               Fixture, NULL, fixture_set_up, test_rows_populated, fixture_tear_down);
-  g_test_add ("/message-list/row-is-activatable",
-              Fixture, NULL, fixture_set_up, test_row_is_activatable, fixture_tear_down);
+  g_test_add ("/message-list/single-click-activates",
+              Fixture, NULL, fixture_set_up, test_single_click_activates, fixture_tear_down);
   g_test_add ("/message-list/activation-emits-signal",
               Fixture, NULL, fixture_set_up, test_activation_emits_signal, fixture_tear_down);
+  g_test_add ("/message-list/large-folder-virtualises",
+              Fixture, NULL, fixture_set_up, test_large_folder_virtualises_rows, fixture_tear_down);
   g_test_add ("/message-list/no-warnings-when-realized",
               Fixture, NULL, fixture_set_up,
               test_no_warnings_when_realized_and_snapshotted,

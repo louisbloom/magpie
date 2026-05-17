@@ -13,19 +13,23 @@ G_DECLARE_FINAL_TYPE (MailMessageList, mail_message_list, MAIL, MESSAGE_LIST, Gt
 
 GtkWidget *mail_message_list_new (void);
 
-/* Replace the current list with the newest @top_n messages in
- * @folder_id on @backend. Cancels any in-flight load. */
+/* Replace the current list with all messages in @folder_id on @backend.
+ * Cancels any in-flight load. The list view virtualises row widgets,
+ * so even tens of thousands of messages are inexpensive to display. */
 void mail_message_list_load (MailMessageList *self,
                              MailBackend *backend,
-                             const char *folder_id,
-                             int top_n);
+                             const char *folder_id);
 
 /* Emitted on row activation. message_id and subject are borrowed; the
  * receiver should duplicate before any operation that could reset the
  * backend's arena. */
 
-/* Test-only: borrowed pointer to the internal GtkListBox. */
-GtkListBox *_mail_message_list_get_list_box_for_test (MailMessageList *self);
+/* Test-only: borrowed pointer to the internal GtkListView. */
+GtkListView *_mail_message_list_get_list_view_for_test (MailMessageList *self);
+
+/* Test-only: borrowed pointer to the backing GListStore (item count
+ * is the true row count regardless of how many widgets are realised). */
+GListModel *_mail_message_list_get_model_for_test (MailMessageList *self);
 
 /* Test-only: borrowed pointer to the internal state GtkStack. */
 GtkStack *_mail_message_list_get_stack_for_test (MailMessageList *self);

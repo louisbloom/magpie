@@ -29,6 +29,7 @@ struct _MailWindow
 
   /* Sync orchestration. */
   MailAccount *current_account;      /* borrowed; the account currently driving the right pane */
+  char *current_folder_id;           /* g_strdup'd; folder displayed in message-list (or NULL) */
   GCancellable *current_pass_cancel; /* ref'd; set while a sync pass is in flight */
   MailAccount *current_pass_account; /* borrowed; account the in-flight pass belongs to */
 };
@@ -80,6 +81,8 @@ on_folder_selected (MailSidebar *sidebar,
   if (backend == NULL || folder_id == NULL)
     return;
   self->current_account = acct;
+  g_free (self->current_folder_id);
+  self->current_folder_id = g_strdup (folder_id);
   /* Reflect the selected folder + account in the content header. The
    * AdwWindowTitle gives us a two-line layout: folder on top,
    * account identity (email) below. The AdwNavigationPage::title is
@@ -97,7 +100,7 @@ on_folder_selected (MailSidebar *sidebar,
   /* Only load if we're showing the list — otherwise the load would
    * fire into the message-list widget while the user can't see it. */
   if (!account_is_syncing (acct))
-    mail_message_list_load (self->message_list, backend, folder_id, 50);
+    mail_message_list_load (self->message_list, backend, folder_id);
 }
 
 static void
@@ -157,6 +160,13 @@ on_sync_done (GObject *src,
    * messages appear immediately. */
   if (acct != NULL)
     mail_sidebar_reload_folders (self->sidebar, acct);
+
+  /* If the just-synced account's folder is what the user is looking at,
+   * re-load the message-list so newly-arrived messages appear at the
+   * top without requiring a manual reselect. */
+  if (acct != NULL && acct == self->current_account && self->current_folder_id != NULL && acct->store_backend != NULL && !account_is_syncing (acct))
+    mail_message_list_load (self->message_list, acct->store_backend,
+                            self->current_folder_id);
 
   /* notify::running -> FALSE will have fired before us; the stack swap
    * happens in that handler, so nothing else to do here. */
@@ -223,6 +233,7 @@ mail_window_dispose (GObject *object)
   if (self->current_pass_cancel != NULL)
     g_cancellable_cancel (self->current_pass_cancel);
   g_clear_object (&self->current_pass_cancel);
+  g_clear_pointer (&self->current_folder_id, g_free);
   G_OBJECT_CLASS (mail_window_parent_class)->dispose (object);
 }
 
