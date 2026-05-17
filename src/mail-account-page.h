@@ -35,4 +35,10 @@ void mail_account_page_set_state (MailAccountPage *self,
                                   GCancellable *cancellable,
                                   const char *account_identity);
 
+/* Test-only: heading label text + cancel button visibility — used to
+ * pin that the page's "active" vs "idle" rendering is driven by
+ * sync's :running state, not just by sync being non-NULL. */
+const char *_mail_account_page_get_heading_text_for_test (MailAccountPage *self);
+gboolean _mail_account_page_is_cancel_visible_for_test (MailAccountPage *self);
+
 G_END_DECLS

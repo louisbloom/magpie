@@ -26,16 +26,52 @@ struct _MailAccountPage
   MailSync *sync;            /* ref'd */
   GCancellable *cancellable; /* ref'd */
   MailEta *eta;
+  char *identity; /* g_strdup'd; the bound account's identity */
   gulong notify_progress_id;
   gulong notify_status_id;
+  gulong notify_running_id;
 };
 
 G_DEFINE_FINAL_TYPE (MailAccountPage, mail_account_page, ADW_TYPE_NAVIGATION_PAGE)
 
+static gboolean
+sync_is_active (MailAccountPage *self)
+{
+  return self->sync != NULL && mail_sync_is_running (self->sync);
+}
+
+static void
+apply_render_mode (MailAccountPage *self)
+{
+  /* The page has two visual modes, driven by whether the bound sync
+   * is currently running. Idle covers both "no sync bound" and "sync
+   * bound but not running" (e.g. just-finished pass), so the user can
+   * still see the sync's final status text after the ring/cancel are
+   * hidden. */
+  gboolean active = sync_is_active (self);
+  const char *identity = self->identity != NULL ? self->identity : "";
+
+  if (active)
+    {
+      g_autofree char *text = g_strdup_printf ("Syncing %s", identity);
+      gtk_label_set_label (self->heading, text);
+    }
+  else
+    {
+      gtk_label_set_label (self->heading, identity);
+    }
+
+  gtk_widget_set_visible (GTK_WIDGET (self->ring), active);
+  gtk_widget_set_visible (GTK_WIDGET (self->eta_label), active);
+  gtk_widget_set_visible (GTK_WIDGET (self->cancel_button), active);
+  gtk_widget_set_sensitive (GTK_WIDGET (self->cancel_button),
+                            active && self->cancellable != NULL);
+}
+
 static void
 update_progress (MailAccountPage *self)
 {
-  if (self->sync == NULL)
+  if (!sync_is_active (self))
     return;
   double fraction = mail_sync_get_progress (self->sync);
   mail_progress_ring_set_fraction (self->ring, fraction);
@@ -54,6 +90,8 @@ update_status (MailAccountPage *self)
 {
   if (self->sync != NULL)
     gtk_label_set_label (self->status, mail_sync_get_status (self->sync));
+  else
+    gtk_label_set_label (self->status, "No sync in progress. Click refresh to sync.");
 }
 
 static void
@@ -70,6 +108,17 @@ on_status_notify (GObject *src,
                   gpointer user_data)
 {
   update_status (user_data);
+}
+
+static void
+on_running_notify (GObject *src,
+                   GParamSpec *pspec,
+                   gpointer user_data)
+{
+  /* The pass ended (or started) while we're showing this page. Flip
+   * the heading/ring/cancel back to idle so the user isn't left with
+   * a "Syncing X" header and a Cancel button after the work is done. */
+  apply_render_mode (user_data);
 }
 
 static void
@@ -97,6 +146,11 @@ disconnect_sync (MailAccountPage *self)
       g_signal_handler_disconnect (self->sync, self->notify_status_id);
       self->notify_status_id = 0;
     }
+  if (self->notify_running_id != 0)
+    {
+      g_signal_handler_disconnect (self->sync, self->notify_running_id);
+      self->notify_running_id = 0;
+    }
   g_clear_object (&self->sync);
 }
 
@@ -115,6 +169,7 @@ mail_account_page_set_state (MailAccountPage *self,
    * pass would skew the rate at the start of the new one. */
   if (self->eta != NULL)
     mail_eta_reset (self->eta);
+  gtk_label_set_label (self->eta_label, "Calculating…");
 
   if (sync != NULL)
     {
@@ -123,37 +178,38 @@ mail_account_page_set_state (MailAccountPage *self,
                                                    G_CALLBACK (on_progress_notify), self);
       self->notify_status_id = g_signal_connect (sync, "notify::status",
                                                  G_CALLBACK (on_status_notify), self);
-      update_progress (self);
-      update_status (self);
+      self->notify_running_id = g_signal_connect (sync, "notify::running",
+                                                  G_CALLBACK (on_running_notify), self);
     }
   if (cancellable != NULL)
     self->cancellable = g_object_ref (cancellable);
 
-  const char *identity = (account_identity != NULL) ? account_identity : "";
-  if (sync != NULL)
-    {
-      g_autofree char *text = g_strdup_printf ("Syncing %s", identity);
-      gtk_label_set_label (self->heading, text);
-      gtk_label_set_label (self->eta_label, "Calculating…");
-      gtk_widget_set_visible (GTK_WIDGET (self->ring), TRUE);
-      gtk_widget_set_visible (GTK_WIDGET (self->eta_label), TRUE);
-      gtk_widget_set_visible (GTK_WIDGET (self->cancel_button), TRUE);
-      gtk_widget_set_sensitive (GTK_WIDGET (self->cancel_button), self->cancellable != NULL);
-    }
-  else
-    {
-      gtk_label_set_label (self->heading, identity);
-      gtk_label_set_label (self->status, "No sync in progress. Click refresh to sync.");
-      gtk_widget_set_visible (GTK_WIDGET (self->ring), FALSE);
-      gtk_widget_set_visible (GTK_WIDGET (self->eta_label), FALSE);
-      gtk_widget_set_visible (GTK_WIDGET (self->cancel_button), FALSE);
-    }
+  g_free (self->identity);
+  self->identity = g_strdup (account_identity != NULL ? account_identity : "");
+
+  apply_render_mode (self);
+  update_progress (self);
+  update_status (self);
 }
 
 GtkWidget *
 mail_account_page_new (void)
 {
   return g_object_new (MAIL_TYPE_ACCOUNT_PAGE, NULL);
+}
+
+const char *
+_mail_account_page_get_heading_text_for_test (MailAccountPage *self)
+{
+  g_return_val_if_fail (MAIL_IS_ACCOUNT_PAGE (self), NULL);
+  return gtk_label_get_label (self->heading);
+}
+
+gboolean
+_mail_account_page_is_cancel_visible_for_test (MailAccountPage *self)
+{
+  g_return_val_if_fail (MAIL_IS_ACCOUNT_PAGE (self), FALSE);
+  return gtk_widget_get_visible (GTK_WIDGET (self->cancel_button));
 }
 
 static void
@@ -163,6 +219,7 @@ mail_account_page_dispose (GObject *object)
   disconnect_sync (self);
   g_clear_object (&self->cancellable);
   g_clear_pointer (&self->eta, mail_eta_free);
+  g_clear_pointer (&self->identity, g_free);
   G_OBJECT_CLASS (mail_account_page_parent_class)->dispose (object);
 }
 

@@ -1,6 +1,6 @@
 # tests/Makefile.am - Unit tests for GNOME Mail.
 
-UNIT_TESTS = test-arena test-accounts test-sidebar test-backend-contract test-message-list test-message-view test-mime test-store test-backend-store test-sync test-eta
+UNIT_TESTS = test-arena test-accounts test-sidebar test-backend-contract test-message-list test-message-view test-mime test-store test-backend-store test-sync test-eta test-account-page
 
 check_PROGRAMS = $(UNIT_TESTS)
 TESTS          = $(UNIT_TESTS)
@@ -27,6 +27,16 @@ LDADD = \
 test_arena_SOURCES    = test-arena.c $(top_srcdir)/src/mail-arena.c
 test_accounts_SOURCES = test-accounts.c
 test_eta_SOURCES      = test-eta.c $(top_srcdir)/src/mail-eta.c
+
+test_account_page_SOURCES = \
+    test-account-page.c \
+    $(top_srcdir)/src/mail-account-page.c \
+    $(top_srcdir)/src/mail-eta.c \
+    $(top_srcdir)/src/mail-progress-ring.c \
+    $(top_srcdir)/src/mail-sync.c \
+    $(top_srcdir)/src/mail-store.c \
+    $(top_srcdir)/src/mail-backend.c \
+    $(top_srcdir)/src/mail-arena.c
 
 test_sidebar_SOURCES = \
     test-sidebar.c \
