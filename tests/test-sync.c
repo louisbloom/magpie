@@ -348,6 +348,42 @@ test_large_folder_syncs_all_messages (void)
   g_ptr_array_unref (strings);
 }
 
+static void
+test_cancel_sets_terminal_status (void)
+{
+  /* Regression: clicking Cancel mid-sync used to leave the page
+   * stuck on the last in-flight status string ("Downloading messages
+   * (2098 / 2926)…") because finish_pass didn't update :status on
+   * error. The fix overrides :status to "Canceled." (or "Sync
+   * failed." for non-cancel errors) before set_running(FALSE) so
+   * observers see a terminal string. */
+  g_autoptr (GError) error = NULL;
+  g_autofree char *root = g_dir_make_tmp ("mail-sync-XXXXXX", &error);
+  MailStore *local = mail_store_open (root, "u@example.com", &error);
+  MailBackend *remote = build_seeded_remote ();
+  MailSync *sync = mail_sync_new ();
+
+  CompletionState s = { 0 };
+  GCancellable *cancel = g_cancellable_new ();
+  mail_sync_run_async (sync, remote, local, cancel, on_done, &s);
+
+  /* Cancel immediately — the pass will unwind through finish_pass(error). */
+  g_cancellable_cancel (cancel);
+  while (!s.done)
+    pump ();
+
+  g_assert_true (g_error_matches (s.error, G_IO_ERROR, G_IO_ERROR_CANCELLED));
+  g_assert_false (s.ok);
+  g_assert_cmpstr (mail_sync_get_status (sync), ==, "Canceled.");
+
+  g_clear_error (&s.error);
+  g_object_unref (cancel);
+  g_object_unref (sync);
+  mail_backend_destroy (remote);
+  mail_store_close (local);
+  rm_rf (root);
+}
+
 int
 main (int argc,
       char **argv)
@@ -359,5 +395,6 @@ main (int argc,
   g_test_add_func ("/mail-sync/removed-folder-deleted", test_removed_folder_gets_deleted_locally);
   g_test_add_func ("/mail-sync/empty-remote", test_empty_remote_still_succeeds);
   g_test_add_func ("/mail-sync/large-folder-syncs-all", test_large_folder_syncs_all_messages);
+  g_test_add_func ("/mail-sync/cancel-sets-terminal-status", test_cancel_sets_terminal_status);
   return g_test_run ();
 }

@@ -130,6 +130,11 @@ on_cancel_clicked (GtkButton *btn,
   if (self->cancellable != NULL && !g_cancellable_is_cancelled (self->cancellable))
     g_cancellable_cancel (self->cancellable);
   gtk_widget_set_sensitive (GTK_WIDGET (btn), FALSE);
+  /* Immediate feedback while cancellation propagates through the
+   * sync engine — the in-flight HTTP request may take a moment to
+   * unwind. finish_pass overwrites this with "Canceled." once the
+   * pass actually ends. */
+  gtk_label_set_label (self->status, "Canceling…");
 }
 
 static void

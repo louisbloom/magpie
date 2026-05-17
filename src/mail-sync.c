@@ -470,6 +470,19 @@ finish_pass (MailSync *self,
   g_clear_pointer (&self->pending_fetches, g_ptr_array_unref);
   self->phase = PHASE_IDLE;
 
+  /* Surface the terminal outcome in :status so observers (the account
+   * page in particular) don't display the last in-flight string —
+   * "Downloading messages (2098 / 2926)…" — after the pass has ended.
+   * Success-path statuses ("Up to date.") are already set by callers
+   * before invoking finish_pass; here we only override on error. */
+  if (error != NULL)
+    {
+      if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
+        set_status (self, g_strdup ("Canceled."));
+      else
+        set_status (self, g_strdup ("Sync failed."));
+    }
+
   set_running (self, FALSE);
 
   if (task != NULL)
