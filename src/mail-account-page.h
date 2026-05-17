@@ -29,16 +29,21 @@ GtkWidget *mail_account_page_new (void);
  * page renders the idle state (no progress ring, no cancel button,
  * heading is just the identity). When @sync is non-NULL the page
  * tracks ::progress and ::status off it; @cancellable is needed to
- * enable the Cancel button. @account_identity is required. */
+ * enable the Cancel button. @account_identity is required;
+ * @account_provider populates the header subtitle and may be NULL or
+ * empty. */
 void mail_account_page_set_state (MailAccountPage *self,
                                   MailSync *sync,
                                   GCancellable *cancellable,
-                                  const char *account_identity);
+                                  const char *account_identity,
+                                  const char *account_provider);
 
-/* Test-only: heading label text + cancel button visibility — used to
- * pin that the page's "active" vs "idle" rendering is driven by
- * sync's :running state, not just by sync being non-NULL. */
+/* Test-only: heading label text + cancel button visibility + header
+ * subtitle — used to pin that the page's "active" vs "idle" rendering
+ * is driven by sync's :running state, not just by sync being non-NULL,
+ * and that the subtitle reflects the bound provider name. */
 const char *_mail_account_page_get_heading_text_for_test (MailAccountPage *self);
 gboolean _mail_account_page_is_cancel_visible_for_test (MailAccountPage *self);
+const char *_mail_account_page_get_subtitle_for_test (MailAccountPage *self);
 
 G_END_DECLS

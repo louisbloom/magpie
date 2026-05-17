@@ -158,7 +158,8 @@ on_account_selected (MailSidebar *sidebar,
   GCancellable *cancel_for_page = (sync_for_page != NULL && self->current_pass_account == acct)
                                       ? self->current_pass_cancel
                                       : NULL;
-  mail_account_page_set_state (self->account_page, sync_for_page, cancel_for_page, acct->identity);
+  mail_account_page_set_state (self->account_page, sync_for_page, cancel_for_page,
+                               acct->identity, acct->provider_name);
   /* Update the right pane's titlebar to reflect the account selection. */
   if (acct->identity != NULL)
     {
@@ -270,7 +271,8 @@ on_refresh_requested (MailSidebar *sidebar,
   mail_account_page_set_state (self->account_page,
                                acct->sync,
                                self->current_pass_cancel,
-                               acct->identity);
+                               acct->identity,
+                               acct->provider_name);
 
   mail_sync_run_async (acct->sync, acct->remote_backend, acct->store,
                        self->current_pass_cancel,

@@ -17,6 +17,7 @@ struct _MailAccountPage
 {
   AdwNavigationPage parent;
 
+  AdwWindowTitle *header_title; /* identity (title) + provider (subtitle) */
   MailProgressRing *ring;
   GtkLabel *heading;
   GtkLabel *status;
@@ -158,7 +159,8 @@ void
 mail_account_page_set_state (MailAccountPage *self,
                              MailSync *sync,
                              GCancellable *cancellable,
-                             const char *account_identity)
+                             const char *account_identity,
+                             const char *account_provider)
 {
   g_return_if_fail (MAIL_IS_ACCOUNT_PAGE (self));
 
@@ -187,6 +189,15 @@ mail_account_page_set_state (MailAccountPage *self,
   g_free (self->identity);
   self->identity = g_strdup (account_identity != NULL ? account_identity : "");
 
+  /* Persistent header bar: identity on top, provider below. Survives
+   * the sync's running ↔ idle transitions; only set_state changes it. */
+  const char *provider = account_provider != NULL ? account_provider : "";
+  adw_window_title_set_title (self->header_title, self->identity);
+  adw_window_title_set_subtitle (self->header_title, provider);
+  /* Keep AdwNavigationPage::title in sync — it's what screen readers
+   * and the collapsed-stack back-button label read. */
+  adw_navigation_page_set_title (ADW_NAVIGATION_PAGE (self), self->identity);
+
   apply_render_mode (self);
   update_progress (self);
   update_status (self);
@@ -212,6 +223,13 @@ _mail_account_page_is_cancel_visible_for_test (MailAccountPage *self)
   return gtk_widget_get_visible (GTK_WIDGET (self->cancel_button));
 }
 
+const char *
+_mail_account_page_get_subtitle_for_test (MailAccountPage *self)
+{
+  g_return_val_if_fail (MAIL_IS_ACCOUNT_PAGE (self), NULL);
+  return adw_window_title_get_subtitle (self->header_title);
+}
+
 static void
 mail_account_page_dispose (GObject *object)
 {
@@ -231,6 +249,11 @@ mail_account_page_init (MailAccountPage *self)
 
   GtkWidget *toolbar = adw_toolbar_view_new ();
   GtkWidget *header = adw_header_bar_new ();
+  /* Two-line title widget — identity on top, provider name below.
+   * Both are populated by mail_account_page_set_state. */
+  self->header_title = ADW_WINDOW_TITLE (adw_window_title_new ("", ""));
+  adw_header_bar_set_title_widget (ADW_HEADER_BAR (header),
+                                   GTK_WIDGET (self->header_title));
   adw_toolbar_view_add_top_bar (ADW_TOOLBAR_VIEW (toolbar), header);
 
   GtkWidget *box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 18);

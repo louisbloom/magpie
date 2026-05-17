@@ -27,7 +27,7 @@ test_bound_to_non_running_sync_renders_idle (void)
   g_object_ref_sink (page);
 
   MailSync *sync = mail_sync_new ();
-  mail_account_page_set_state (page, sync, NULL, "user@example.com");
+  mail_account_page_set_state (page, sync, NULL, "user@example.com", "Microsoft 365");
 
   const char *heading = _mail_account_page_get_heading_text_for_test (page);
   g_assert_nonnull (heading);
@@ -47,11 +47,36 @@ test_unbound_renders_idle (void)
   MailAccountPage *page = MAIL_ACCOUNT_PAGE (mail_account_page_new ());
   g_object_ref_sink (page);
 
-  mail_account_page_set_state (page, NULL, NULL, "user@example.com");
+  mail_account_page_set_state (page, NULL, NULL, "user@example.com", "Microsoft 365");
 
   const char *heading = _mail_account_page_get_heading_text_for_test (page);
   g_assert_cmpstr (heading, ==, "user@example.com");
   g_assert_false (_mail_account_page_is_cancel_visible_for_test (page));
+
+  g_object_unref (page);
+}
+
+static void
+test_subtitle_reflects_provider (void)
+{
+  /* The header bar's two-line title widget shows the account identity
+   * on top and the provider name below, so the right pane keeps a
+   * persistent indicator of which account it's about regardless of
+   * sync state. Without this, the only identification was the body
+   * heading, which the idle render reduces to just the identity. */
+  MailAccountPage *page = MAIL_ACCOUNT_PAGE (mail_account_page_new ());
+  g_object_ref_sink (page);
+
+  mail_account_page_set_state (page, NULL, NULL, "thomasc1971@hotmail.com", "Microsoft 365");
+  g_assert_cmpstr (_mail_account_page_get_subtitle_for_test (page), ==, "Microsoft 365");
+
+  /* Re-bind with a different provider; subtitle should update. */
+  mail_account_page_set_state (page, NULL, NULL, "x@y.z", "Other Provider");
+  g_assert_cmpstr (_mail_account_page_get_subtitle_for_test (page), ==, "Other Provider");
+
+  /* NULL/empty provider renders as an empty subtitle, not "(null)". */
+  mail_account_page_set_state (page, NULL, NULL, "x@y.z", NULL);
+  g_assert_cmpstr (_mail_account_page_get_subtitle_for_test (page), ==, "");
 
   g_object_unref (page);
 }
@@ -66,5 +91,7 @@ main (int argc, char **argv)
                    test_bound_to_non_running_sync_renders_idle);
   g_test_add_func ("/account-page/unbound-renders-idle",
                    test_unbound_renders_idle);
+  g_test_add_func ("/account-page/subtitle-reflects-provider",
+                   test_subtitle_reflects_provider);
   return g_test_run ();
 }
