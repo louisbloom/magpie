@@ -34,6 +34,8 @@ mail_SOURCES = \
     mail-refresh-button.h \
     mail-account-page.c \
     mail-account-page.h \
+    mail-eta.c \
+    mail-eta.h \
     mail-backend-msgraph.c \
     mail-backend-msgraph.h \
     mail-backend-imap.c \

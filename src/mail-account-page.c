@@ -10,6 +10,7 @@
 #include "config.h"
 
 #include "mail-account-page.h"
+#include "mail-eta.h"
 #include "mail-progress-ring.h"
 
 struct _MailAccountPage
@@ -19,10 +20,12 @@ struct _MailAccountPage
   MailProgressRing *ring;
   GtkLabel *heading;
   GtkLabel *status;
+  GtkLabel *eta_label;
   GtkButton *cancel_button;
 
   MailSync *sync;            /* ref'd */
   GCancellable *cancellable; /* ref'd */
+  MailEta *eta;
   gulong notify_progress_id;
   gulong notify_status_id;
 };
@@ -32,8 +35,18 @@ G_DEFINE_FINAL_TYPE (MailAccountPage, mail_account_page, ADW_TYPE_NAVIGATION_PAG
 static void
 update_progress (MailAccountPage *self)
 {
-  if (self->sync != NULL)
-    mail_progress_ring_set_fraction (self->ring, mail_sync_get_progress (self->sync));
+  if (self->sync == NULL)
+    return;
+  double fraction = mail_sync_get_progress (self->sync);
+  mail_progress_ring_set_fraction (self->ring, fraction);
+
+  if (self->eta != NULL)
+    {
+      mail_eta_record (self->eta, g_get_monotonic_time (), fraction);
+      double s = mail_eta_seconds_remaining (self->eta);
+      g_autofree char *text = mail_eta_format (s);
+      gtk_label_set_label (self->eta_label, text);
+    }
 }
 
 static void
@@ -98,6 +111,11 @@ mail_account_page_set_state (MailAccountPage *self,
   disconnect_sync (self);
   g_clear_object (&self->cancellable);
 
+  /* Fresh sync ⇒ fresh ETA window. Sample history from a previous
+   * pass would skew the rate at the start of the new one. */
+  if (self->eta != NULL)
+    mail_eta_reset (self->eta);
+
   if (sync != NULL)
     {
       self->sync = g_object_ref (sync);
@@ -116,7 +134,9 @@ mail_account_page_set_state (MailAccountPage *self,
     {
       g_autofree char *text = g_strdup_printf ("Syncing %s", identity);
       gtk_label_set_label (self->heading, text);
+      gtk_label_set_label (self->eta_label, "Calculating…");
       gtk_widget_set_visible (GTK_WIDGET (self->ring), TRUE);
+      gtk_widget_set_visible (GTK_WIDGET (self->eta_label), TRUE);
       gtk_widget_set_visible (GTK_WIDGET (self->cancel_button), TRUE);
       gtk_widget_set_sensitive (GTK_WIDGET (self->cancel_button), self->cancellable != NULL);
     }
@@ -125,6 +145,7 @@ mail_account_page_set_state (MailAccountPage *self,
       gtk_label_set_label (self->heading, identity);
       gtk_label_set_label (self->status, "No sync in progress. Click refresh to sync.");
       gtk_widget_set_visible (GTK_WIDGET (self->ring), FALSE);
+      gtk_widget_set_visible (GTK_WIDGET (self->eta_label), FALSE);
       gtk_widget_set_visible (GTK_WIDGET (self->cancel_button), FALSE);
     }
 }
@@ -141,6 +162,7 @@ mail_account_page_dispose (GObject *object)
   MailAccountPage *self = MAIL_ACCOUNT_PAGE (object);
   disconnect_sync (self);
   g_clear_object (&self->cancellable);
+  g_clear_pointer (&self->eta, mail_eta_free);
   G_OBJECT_CLASS (mail_account_page_parent_class)->dispose (object);
 }
 
@@ -170,6 +192,17 @@ mail_account_page_init (MailAccountPage *self)
   self->status = GTK_LABEL (gtk_label_new (""));
   gtk_widget_add_css_class (GTK_WIDGET (self->status), "dim-label");
   gtk_box_append (GTK_BOX (box), GTK_WIDGET (self->status));
+
+  self->eta_label = GTK_LABEL (gtk_label_new (""));
+  gtk_widget_add_css_class (GTK_WIDGET (self->eta_label), "dim-label");
+  gtk_widget_add_css_class (GTK_WIDGET (self->eta_label), "caption");
+  gtk_widget_set_visible (GTK_WIDGET (self->eta_label), FALSE);
+  gtk_box_append (GTK_BOX (box), GTK_WIDGET (self->eta_label));
+
+  /* 10-second sliding window — long enough to absorb per-message
+   * jitter, short enough to react within a few seconds of a real
+   * speed change. See mail-eta.h for the algorithm rationale. */
+  self->eta = mail_eta_new (10 * G_USEC_PER_SEC);
 
   self->cancel_button = GTK_BUTTON (gtk_button_new_with_label ("Cancel"));
   gtk_widget_set_halign (GTK_WIDGET (self->cancel_button), GTK_ALIGN_CENTER);
