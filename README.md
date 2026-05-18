@@ -18,7 +18,10 @@ the on-disk store under `~/Mail/<identity>/`, and remote providers are
 contacted only when the user explicitly triggers a sync from the
 account page. The provider then reconciles its message list into the
 store, pulling new bodies and pruning ones that have disappeared
-upstream.
+upstream. The on-disk Maildir is authoritative — other clients (mutt,
+another magpie instance) sharing the same Maildir interoperate cleanly,
+and their flag changes propagate to magpie's UI in real time via a
+per-folder `GFileMonitor`.
 
 The scope is deliberately narrow at this stage: browse the folders of
 your configured accounts, trigger and watch syncs, and read messages
@@ -76,6 +79,13 @@ because they're how to evaluate a change, not just describe one.
   lives under `tests/` so regression tests run headless without network
   or GOA accounts.
 
+- **Maildir is the source of truth, sqlite is an optimization.** Every
+  state change writes the on-disk Maildir first and reflects to sqlite
+  second. sqlite earns its place as an indexed cache for message-list
+  rendering and unread counts, not as a second authority. When the two
+  disagree, disk wins — a `MailMaildirWatcher` per account reconciles
+  drift in real time and at startup.
+
 - **Reuse the GNOME platform.** GMime for MIME, libsoup for HTTP,
   json-glib for JSON, libetpan for IMAP, sqlite3 for the local index,
   GOA for OAuth refresh. We do not reinvent what the platform already
@@ -114,10 +124,22 @@ Early prototype. The current shape:
   message cap); a `messages.remote_id` UNIQUE constraint keeps repeat
   passes idempotent.
 - **Local store.** `MailStore` owns a Maildir tree + sqlite index at
-  `~/Mail/<identity>/`. The UI reads through `mail-backend-store` (a
+  `~/Mail/<identity>/`. The Maildir is authoritative; sqlite is an
+  indexed cache over it. The UI reads through `mail-backend-store` (a
   `MailBackend` implementation that wraps the store), so the
   rendering path never blocks on the network and the sync engine is
   the only thing that talks to providers.
+- **Live updates from disk.** Reading a mail in magpie or marking it
+  read in a parallel mutt session both flow through the same
+  push-based change-notification spine on `MailStore` and
+  `MailBackend`: the sidebar unread badge and the message-list
+  boldness update in the same frame, without a sync running. A
+  per-account `MailMaildirWatcher` arms one `GFileMonitor` per
+  folder's `cur/` with a 120 ms debounce; watcher events run the
+  disk → sqlite reconciler, which emits the same events the local
+  mark-read path emits. The reconciler also runs once at startup so
+  drift accumulated while magpie was closed is corrected before the
+  user clicks anything.
 - **Providers.** Microsoft Graph (functional, with `@odata.nextLink`
   pagination); IMAP via libetpan with SASL XOAUTH2 (Gmail tested),
   with cross-folder body deduplication keyed on the RFC 5322
@@ -128,12 +150,13 @@ Early prototype. The current shape:
   initial-sync's per-message round-trip cost amortises into a
   near-constant overhead. Selection is per-account via
   GOA's reported provider type.
-- **Tests.** Thirteen test binaries under `tests/`, running under
+- **Tests.** Sixteen test binaries under `tests/`, running under
   `gtk_test_init` where they touch widgets: `test-arena`,
   `test-accounts`, `test-sidebar`, `test-backend-contract`,
   `test-message-list`, `test-message-view`, `test-mime`,
-  `test-imap-id`, `test-store`, `test-backend-store`, `test-sync`,
-  `test-eta`, `test-account-page`. Every bug fix lands with a
+  `test-imap-id`, `test-imap-retry`, `test-store`,
+  `test-backend-store`, `test-sync`, `test-eta`, `test-account-page`,
+  `test-window`, `test-maildir-watcher`. Every bug fix lands with a
   regression test (see the principles).
 
 ## Build
