@@ -27,6 +27,7 @@
 
 #include "mail-backend-imap.h"
 #include "mail-imap-id.h"
+#include "mail-imap-retry.h"
 #include "mail-mime.h"
 
 #include <gmime/gmime.h>
@@ -822,12 +823,22 @@ run_with_auth_retry (MailBackendIMAP *self,
 
       if (!ensure_connected_locked (self, token, error))
         {
-          /* Auth-related failure on connect/AUTHENTICATE: drop token
-           * and retry once. Anything else (transport, DNS) is final. */
-          if (attempt == 0 && *error != NULL && g_error_matches (*error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED))
+          /* Auth or transport failure on connect/AUTHENTICATE.
+           * ensure_connected_locked has already dropped the
+           * connection on its own; we just decide whether to retry.
+           * Auth: refresh the token. Transport: token is fine, the
+           * next attempt's ensure_connected_locked rebuilds the
+           * socket. */
+          if (attempt == 0)
             {
-              invalidate_token_locked (self);
-              continue;
+              ImapRetryAction action = imap_retry_action_for_error (*error);
+              if (action == IMAP_RETRY_AUTH)
+                {
+                  invalidate_token_locked (self);
+                  continue;
+                }
+              if (action == IMAP_RETRY_TRANSPORT)
+                continue;
             }
           return FALSE;
         }
@@ -858,11 +869,24 @@ run_with_auth_retry (MailBackendIMAP *self,
           *out_result = result;
           return TRUE;
         }
-      if (attempt == 0 && *error != NULL && g_error_matches (*error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED))
+      if (attempt == 0)
         {
-          invalidate_token_locked (self);
-          drop_connection_locked (self);
-          continue;
+          ImapRetryAction action = imap_retry_action_for_error (*error);
+          if (action == IMAP_RETRY_AUTH)
+            {
+              invalidate_token_locked (self);
+              drop_connection_locked (self);
+              continue;
+            }
+          if (action == IMAP_RETRY_TRANSPORT)
+            {
+              /* Worker already dropped the connection on a
+               * transport-fatal rc; call drop_connection_locked
+               * again defensively (it's idempotent) in case a
+               * future op type forgets. Token is still valid. */
+              drop_connection_locked (self);
+              continue;
+            }
         }
       return FALSE;
     }

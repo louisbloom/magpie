@@ -20,6 +20,8 @@ mail_SOURCES = \
     mail-mime.h \
     mail-imap-id.c \
     mail-imap-id.h \
+    mail-imap-retry.c \
+    mail-imap-retry.h \
     mail-account.c \
     mail-account.h \
     mail-store.c \
