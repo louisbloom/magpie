@@ -21,6 +21,11 @@
 
 #define MAIL_STORE_SCHEMA_VERSION 2
 
+/* Stamp the sqlite file header so `file(1)` and forensic tooling can
+ * identify a stray state.db as Magpie's. Encoded as the fourcc 'Mgpi'
+ * (M=0x4D, g=0x67, p=0x70, i=0x69 -> 0x4D677069). */
+#define MAIL_STORE_APPLICATION_ID 0x4D677069
+
 struct _MailStore
 {
   char *root;     /* ~/Mail/<identity> */
@@ -213,6 +218,15 @@ ensure_schema (MailStore *self,
   if (!exec_sql (self->db, "PRAGMA foreign_keys = ON;", error))
     return FALSE;
   if (!exec_sql (self->db, "PRAGMA journal_mode = WAL;", error))
+    return FALSE;
+
+  /* Tag the file header with MAIL_STORE_APPLICATION_ID. Idempotent at
+   * the sqlite level (same value re-written is a no-op page write). */
+  char *app_pragma = g_strdup_printf ("PRAGMA application_id = %u;",
+                                      MAIL_STORE_APPLICATION_ID);
+  gboolean app_ok = exec_sql (self->db, app_pragma, error);
+  g_free (app_pragma);
+  if (!app_ok)
     return FALSE;
 
   /* Probe user_version first. 0 = brand new; 1 = pre-content_key

@@ -450,6 +450,24 @@ test_link_raw_creates_hardlink (Fixture *f,
 }
 
 static void
+test_application_id_is_magpie (Fixture *f,
+                               gconstpointer data)
+{
+  /* The store stamps its sqlite header with the fourcc 'Mgpi'
+   * (0x4D677069) so a stray state.db is identifiable as Magpie's. */
+  g_autofree char *dbpath = g_build_filename (f->root, "state.db", NULL);
+  sqlite3 *probe = NULL;
+  g_assert_cmpint (sqlite3_open (dbpath, &probe), ==, SQLITE_OK);
+  sqlite3_stmt *st = NULL;
+  g_assert_cmpint (sqlite3_prepare_v2 (probe, "PRAGMA application_id;", -1, &st, NULL),
+                   ==, SQLITE_OK);
+  g_assert_cmpint (sqlite3_step (st), ==, SQLITE_ROW);
+  g_assert_cmpint (sqlite3_column_int (st, 0), ==, 0x4D677069);
+  sqlite3_finalize (st);
+  sqlite3_close (probe);
+}
+
+static void
 test_schema_migration_v1_to_v2 (Fixture *f,
                                 gconstpointer data)
 {
@@ -557,6 +575,7 @@ main (int argc,
   ADD ("locate-body-by-content-key", test_locate_by_content_key);
   ADD ("link-raw-creates-hardlink", test_link_raw_creates_hardlink);
   ADD ("schema-migration-v1-to-v2", test_schema_migration_v1_to_v2);
+  ADD ("application-id-stamped", test_application_id_is_magpie);
 
 #undef ADD
 
