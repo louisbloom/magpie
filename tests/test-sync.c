@@ -723,16 +723,16 @@ test_fallback_when_no_batched_vt (void)
   rm_rf (root);
 }
 
-/* Pin the unread/total propagation path: a backend's reported
- * counts must reach the sqlite folders table and come back out
- * through mail_store_list_folders. The sidebar drives its numeric
- * badge off MailFolder.unread_count on the rows that
- * mail-backend-store returns from exactly this path. Backstory:
- * the IMAP backend used to hardcode both fields to zero, so the
- * pipeline was correct but the input was always (0, 0); pinning
- * the pipeline here means a future refactor that drops the counts
- * along the way trips an obvious failure regardless of which
- * backend is to blame. */
+/* Pin the user-visible badge count pipeline end-to-end: a backend
+ * reports messages with unread flags, sync persists them to the
+ * local store, and mail_store_list_folders surfaces counts derived
+ * from the actual stored messages — not from what the backend's
+ * folder spec advertised. This means an interrupted sync correctly
+ * displays a smaller badge: only what's actually been fetched
+ * shows, instead of the server's (cached) UNSEEN count promising
+ * mail that isn't here yet. The pre-sync folder counts in the
+ * FakeFolderSpec below are deliberately wildly wrong (999 / 999)
+ * to make sure they can't leak through. */
 static void
 test_folder_unread_and_total_persist_through_sync (void)
 {
@@ -743,16 +743,38 @@ test_folder_unread_and_total_persist_through_sync (void)
   g_assert_no_error (error);
 
   MailBackend *remote = mail_backend_fake_new ();
-  /* Three folders covering the three cases the sidebar discriminates:
-   * unread > 0 (badge + bold), unread == 0 with total > 0 (no badge,
-   * plain name, tooltip with the total), and unread == total (all
-   * messages unseen — a freshly-imported folder). */
+  /* The FakeFolderSpec unread/total are bogus on purpose. */
   const FakeFolderSpec folders[] = {
-    { "f-inbox", "Inbox", NULL, 4, 10 },
-    { "f-sent", "Sent", NULL, 0, 5 },
-    { "f-junk", "Junk", NULL, 12, 12 },
+    { "f-inbox", "Inbox", NULL, 999, 999 },
+    { "f-sent", "Sent", NULL, 999, 999 },
+    { "f-junk", "Junk", NULL, 999, 999 },
   };
   mail_backend_fake_set_folders (remote, folders, G_N_ELEMENTS (folders));
+
+  /* Inbox: 2 unread + 3 read = 5 total. */
+  const FakeMessageSpec inbox_msgs[] = {
+    { "i1", "s", "a@b", 1700000000, TRUE, "body i1" },
+    { "i2", "s", "a@b", 1700000001, TRUE, "body i2" },
+    { "i3", "s", "a@b", 1700000002, FALSE, "body i3" },
+    { "i4", "s", "a@b", 1700000003, FALSE, "body i4" },
+    { "i5", "s", "a@b", 1700000004, FALSE, "body i5" },
+  };
+  /* Sent: 0 unread + 3 read = 3 total. */
+  const FakeMessageSpec sent_msgs[] = {
+    { "s1", "s", "a@b", 1700000000, FALSE, "body s1" },
+    { "s2", "s", "a@b", 1700000001, FALSE, "body s2" },
+    { "s3", "s", "a@b", 1700000002, FALSE, "body s3" },
+  };
+  /* Junk: 4 unread + 0 read = 4 total. */
+  const FakeMessageSpec junk_msgs[] = {
+    { "j1", "s", "a@b", 1700000000, TRUE, "body j1" },
+    { "j2", "s", "a@b", 1700000001, TRUE, "body j2" },
+    { "j3", "s", "a@b", 1700000002, TRUE, "body j3" },
+    { "j4", "s", "a@b", 1700000003, TRUE, "body j4" },
+  };
+  mail_backend_fake_set_messages (remote, "f-inbox", inbox_msgs, G_N_ELEMENTS (inbox_msgs));
+  mail_backend_fake_set_messages (remote, "f-sent", sent_msgs, G_N_ELEMENTS (sent_msgs));
+  mail_backend_fake_set_messages (remote, "f-junk", junk_msgs, G_N_ELEMENTS (junk_msgs));
 
   MailSync *sync = mail_sync_new ();
   run_to_completion (sync, remote, local, NULL);
@@ -763,17 +785,26 @@ test_folder_unread_and_total_persist_through_sync (void)
   g_assert_no_error (error);
   g_assert_cmpuint (rows->len, ==, G_N_ELEMENTS (folders));
 
-  for (gsize i = 0; i < G_N_ELEMENTS (folders); i++)
+  struct
+  {
+    const char *id;
+    int unread;
+    int total;
+  } expected[] = {
+    { "f-inbox", 2, 5 },
+    { "f-sent", 0, 3 },
+    { "f-junk", 4, 4 },
+  };
+  for (gsize i = 0; i < G_N_ELEMENTS (expected); i++)
     {
-      const FakeFolderSpec *want = &folders[i];
       gboolean found = FALSE;
       for (guint j = 0; j < rows->len; j++)
         {
           MailFolder *got = g_ptr_array_index (rows, j);
-          if (g_strcmp0 (got->id, want->id) != 0)
+          if (g_strcmp0 (got->id, expected[i].id) != 0)
             continue;
-          g_assert_cmpint (got->unread_count, ==, want->unread);
-          g_assert_cmpint (got->total_count, ==, want->total);
+          g_assert_cmpint (got->unread_count, ==, expected[i].unread);
+          g_assert_cmpint (got->total_count, ==, expected[i].total);
           found = TRUE;
           break;
         }

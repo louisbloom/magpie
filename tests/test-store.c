@@ -102,6 +102,12 @@ test_list_folders_returns_inserted (Fixture *f,
                                     gconstpointer data)
 {
   g_autoptr (GError) error = NULL;
+  /* unread/total args here populate folders.unread / folders.total
+   * — backends report server-side counts via this path — but
+   * mail_store_list_folders derives the values it returns from the
+   * messages table. Both folders are empty here, so the listed
+   * counts are 0 regardless of what we passed in. The pin against
+   * the cached column is in test_list_folders_counts_derive_from_messages. */
   g_assert_true (mail_store_upsert_folder (f->store, "rid-INBOX", "INBOX", NULL,
                                            3, 42, NULL, &error));
   g_assert_no_error (error);
@@ -116,10 +122,53 @@ test_list_folders_returns_inserted (Fixture *f,
   MailFolder *first = g_ptr_array_index (folders, 0);
   MailFolder *second = g_ptr_array_index (folders, 1);
   g_assert_cmpstr (first->display_name, ==, "INBOX");
-  g_assert_cmpint (first->unread_count, ==, 3);
-  g_assert_cmpint (first->total_count, ==, 42);
+  g_assert_cmpint (first->unread_count, ==, 0);
+  g_assert_cmpint (first->total_count, ==, 0);
   g_assert_cmpstr (first->id, ==, "rid-INBOX");
   g_assert_cmpstr (second->display_name, ==, "Sent");
+  g_assert_cmpint (second->unread_count, ==, 0);
+  g_assert_cmpint (second->total_count, ==, 0);
+  g_ptr_array_unref (folders);
+}
+
+/* Pin the rule that mail_store_list_folders derives unread/total
+ * from the messages table rather than the cached folders.unread /
+ * folders.total columns. Backstory: backends populate the cached
+ * columns from server-reported counts (Graph's unreadItemCount,
+ * IMAP STATUS UNSEEN/MESSAGES), so after a cancelled sync those
+ * cached numbers advertised mail the local store didn't actually
+ * have — the sidebar showed Inbox=5315 while only ~50 messages had
+ * been fetched. The new SELECT counts messages live; this test
+ * confirms it. */
+static void
+test_list_folders_counts_derive_from_messages (Fixture *f,
+                                               gconstpointer data)
+{
+  g_autoptr (GError) error = NULL;
+  /* Upsert a folder with deliberately wrong cached counts — what a
+   * server would report — so we can prove the returned values come
+   * from the messages table, not from these arguments. */
+  g_assert_true (mail_store_upsert_folder (f->store, "rid-INBOX", "INBOX", NULL,
+                                           999, 999, NULL, &error));
+  g_assert_no_error (error);
+
+  /* Two unread, one read. Local truth: unread=2, total=3. */
+  g_assert_true (mail_store_upsert_message (f->store, "rid-INBOX", "msg-u1", NULL, "f1",
+                                            "S1", "a@x", 1700000000, TRUE, NULL, &error));
+  g_assert_no_error (error);
+  g_assert_true (mail_store_upsert_message (f->store, "rid-INBOX", "msg-u2", NULL, "f2",
+                                            "S2", "a@x", 1700000001, TRUE, NULL, &error));
+  g_assert_no_error (error);
+  g_assert_true (mail_store_upsert_message (f->store, "rid-INBOX", "msg-r1", NULL, "f3",
+                                            "S3", "a@x", 1700000002, FALSE, NULL, &error));
+  g_assert_no_error (error);
+
+  GPtrArray *folders = mail_store_list_folders (f->store, &f->arena, &error);
+  g_assert_no_error (error);
+  g_assert_cmpuint (folders->len, ==, 1);
+  MailFolder *only = g_ptr_array_index (folders, 0);
+  g_assert_cmpint (only->unread_count, ==, 2);
+  g_assert_cmpint (only->total_count, ==, 3);
   g_ptr_array_unref (folders);
 }
 
@@ -145,8 +194,11 @@ test_upsert_folder_update_does_not_rename_dir (Fixture *f,
   g_assert_cmpuint (folders->len, ==, 1);
   MailFolder *only = g_ptr_array_index (folders, 0);
   g_assert_cmpstr (only->display_name, ==, "INBOX (renamed)");
-  g_assert_cmpint (only->unread_count, ==, 5);
-  g_assert_cmpint (only->total_count, ==, 50);
+  /* Counts come from the messages table; no messages were upserted,
+   * so even though the upsert passed unread=5/total=50, listing
+   * yields the local-store truth: 0/0. */
+  g_assert_cmpint (only->unread_count, ==, 0);
+  g_assert_cmpint (only->total_count, ==, 0);
   g_ptr_array_unref (folders);
 }
 
@@ -492,6 +544,7 @@ main (int argc,
   ADD ("open-creates-root", test_open_creates_root);
   ADD ("upsert-folder-maildir-dirs", test_upsert_folder_creates_maildir_dirs);
   ADD ("list-folders", test_list_folders_returns_inserted);
+  ADD ("list-folders-counts-from-messages", test_list_folders_counts_derive_from_messages);
   ADD ("upsert-folder-update-keeps-dir", test_upsert_folder_update_does_not_rename_dir);
   ADD ("collision-suffix", test_collision_suffixes_with_tilde);
   ADD ("slash-sanitized", test_slash_in_display_name_sanitized);

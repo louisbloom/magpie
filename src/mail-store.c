@@ -313,8 +313,23 @@ prepare_statements (MailStore *self,
       "UPDATE folders SET display_name = ?, parent_remote_id = ?, unread = ?, total = ?"
       " WHERE stable_id = ?;" },
     { &self->st_folder_list,
-      "SELECT remote_id, display_name, parent_remote_id, unread, total"
-      " FROM folders ORDER BY display_name;" },
+      /* unread and total are derived live from the messages table
+       * rather than read from folders.unread / folders.total.
+       * Backends populate those cached columns from server-reported
+       * counts (Graph's unreadItemCount / IMAP STATUS), so after a
+       * cancelled sync they advertise messages the local store
+       * doesn't actually have. The COUNT-from-messages form keeps
+       * the sidebar in sync with what the message list view can
+       * actually show. LEFT JOIN preserves empty folders as 0/0;
+       * COUNT(CASE ...) only counts unread rows; the
+       * messages_folder_received index covers the per-folder scan. */
+      "SELECT f.remote_id, f.display_name, f.parent_remote_id,"
+      "       COUNT(CASE WHEN m.unread = 1 THEN 1 END) AS unread,"
+      "       COUNT(m.stable_id)                       AS total"
+      " FROM folders f"
+      " LEFT JOIN messages m ON m.folder_stable_id = f.stable_id"
+      " GROUP BY f.stable_id"
+      " ORDER BY f.display_name;" },
     { &self->st_folder_remote_ids,
       "SELECT remote_id FROM folders;" },
     { &self->st_folder_dir_name,
