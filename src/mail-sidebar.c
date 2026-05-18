@@ -402,8 +402,10 @@ on_list_folders_done (GObject *source,
 /* MailBackendChange handler. The user_data names which account these
  * events belong to so the row-walk skips items from other accounts
  * (folder_ids can collide across accounts). For FOLDER_COUNTS we
- * write the absolute new unread back into the matching MailSidebarItem
- * and force a row rebuild via items-changed. */
+ * swap in a freshly-built MailSidebarItem carrying the new counts and
+ * let GListStore's own splice fire items-changed — see the
+ * matching note in mail-message-list.c::apply_unread_bit for why a
+ * fresh wrapper rather than a raw g_list_model_items_changed call. */
 static void
 on_backend_change (MailBackend *backend,
                    const MailBackendChange *change,
@@ -426,8 +428,12 @@ on_backend_change (MailBackend *backend,
         continue;
       if (g_strcmp0 (it->folder_id, change->folder_id) != 0)
         continue;
-      it->unread = change->folder_unread;
-      g_list_model_items_changed (G_LIST_MODEL (self->store), i, 1, 1);
+      MailSidebarItem *fresh = mail_sidebar_item_new_folder (
+          it->account, it->folder_id, it->title, change->folder_unread,
+          change->folder_total);
+      gpointer additions[] = { fresh };
+      g_list_store_splice (self->store, i, 1, additions, 1);
+      g_object_unref (fresh);
       return;
     }
 }

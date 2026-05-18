@@ -378,6 +378,69 @@ test_markup_special_chars (void)
   mail_backend_destroy (fake);
 }
 
+/* Count realised row titles that currently carry the "heading" CSS
+ * class. Walks the same subtree as the virtualisation test, picking
+ * out hboxes by the "mail-title" GObject data set in factory_setup. */
+static guint
+count_heading_titles (MailMessageList *list)
+{
+  guint n_heading = 0;
+  GQueue stack = G_QUEUE_INIT;
+  g_queue_push_tail (&stack,
+                     gtk_widget_get_first_child (GTK_WIDGET (_mail_message_list_get_list_view_for_test (list))));
+  while (!g_queue_is_empty (&stack))
+    {
+      GtkWidget *w = g_queue_pop_head (&stack);
+      while (w != NULL)
+        {
+          GtkWidget *title = g_object_get_data (G_OBJECT (w), "mail-title");
+          if (title != NULL && gtk_widget_has_css_class (title, "heading"))
+            n_heading++;
+          GtkWidget *c = gtk_widget_get_first_child (w);
+          if (c != NULL)
+            g_queue_push_tail (&stack, c);
+          w = gtk_widget_get_next_sibling (w);
+        }
+    }
+  g_queue_clear (&stack);
+  return n_heading;
+}
+
+/* Regression: marking a message read used to mutate the borrowed
+ * meta and emit raw g_list_model_items_changed on the GListStore.
+ * GtkListView's diff is keyed on item-pointer identity, so the same
+ * MailMessageRowItem* at position i didn't trigger an unbind → bind
+ * cycle. The visible symptom: open a mail, press <Escape>, the row
+ * still rendered bold. The fix swaps the row item GObject in place
+ * via g_list_store_splice; this test pins it. */
+static void
+test_mark_read_rebinds_title_css (Fixture *f, gconstpointer ud)
+{
+  (void) ud;
+  GtkWidget *window = gtk_window_new ();
+  gtk_window_set_default_size (GTK_WINDOW (window), 600, 400);
+  g_object_ref (f->list);
+  gtk_window_set_child (GTK_WINDOW (window), GTK_WIDGET (f->list));
+  gtk_window_present (GTK_WINDOW (window));
+  pump_main_loop ();
+
+  /* Fixture seeded m2 as the single unread row → exactly one realised
+   * title carries the "heading" class. */
+  g_assert_cmpuint (count_heading_titles (f->list), ==, 1);
+
+  mail_message_list_mark_read (f->list, "m2");
+  pump_main_loop ();
+
+  /* After the splice replaces the row item at m2's position, GtkListView
+   * runs the factory's bind step on the new wrapper. meta->unread is
+   * now FALSE, so the title widget's "heading" class is gone. */
+  g_assert_cmpuint (count_heading_titles (f->list), ==, 0);
+
+  gtk_window_destroy (GTK_WINDOW (window));
+  pump_main_loop ();
+  g_object_unref (f->list);
+}
+
 /* Backend MESSAGE_FLAGS events on the currently loaded folder must
  * update the matching row's unread bit in place, without a reload.
  * Other folders are no-ops; events for unknown messages are dropped.
@@ -506,6 +569,8 @@ main (int argc,
               Fixture, NULL, fixture_set_up, test_activation_emits_signal, fixture_tear_down);
   g_test_add ("/message-list/mark-read-flips-unread",
               Fixture, NULL, fixture_set_up, test_mark_read_flips_unread, fixture_tear_down);
+  g_test_add ("/message-list/mark-read-rebinds-title-css",
+              Fixture, NULL, fixture_set_up, test_mark_read_rebinds_title_css, fixture_tear_down);
   g_test_add ("/message-list/backend-flags-event-updates-row",
               Fixture, NULL, fixture_set_up, test_backend_flags_event_updates_row, fixture_tear_down);
   g_test_add ("/message-list/large-folder-virtualises",

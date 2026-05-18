@@ -257,12 +257,22 @@ apply_unread_bit (MailMessageList *self,
       /* The MailMessageMeta is borrowed from the backend's arena. The
        * `const` on the row item's pointer is borrow discipline (so
        * factory_bind treats it as read-only), not enforcement — the
-       * arena memory is plain malloc. Mutating the unread bit here
-       * lets the next bind pick up the new value; emitting
-       * items-changed on the row drives GtkListView to rebind it. */
+       * arena memory is plain malloc. Mutating the unread bit in place
+       * lets the next factory_bind pick up the new value.
+       *
+       * GtkListView's row diff hashes by item-pointer identity: a
+       * raw g_list_model_items_changed leaves the same MailMessageRowItem*
+       * at position i, so its widget is never rebound — that's the
+       * "boldness persists across <Escape>" regression. g_list_store_splice
+       * gives the view a fresh GObject wrapper around the same meta,
+       * forcing the unbind → bind cycle and the title's "heading" class
+       * to be re-evaluated. */
       MailMessageMeta *meta = (MailMessageMeta *) item->meta;
       meta->unread = unread;
-      g_list_model_items_changed (G_LIST_MODEL (self->store), i, 1, 1);
+      MailMessageRowItem *fresh = mail_message_row_item_new (meta);
+      gpointer additions[] = { fresh };
+      g_list_store_splice (self->store, i, 1, additions, 1);
+      g_object_unref (fresh);
       return;
     }
 }
