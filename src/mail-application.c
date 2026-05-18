@@ -1,4 +1,4 @@
-/* mail-application.c - AdwApplication subclass for GNOME Mail. */
+/* mail-application.c - AdwApplication subclass for Magpie. */
 
 #include "config.h"
 
@@ -37,8 +37,8 @@ MailApplication *
 mail_application_new (void)
 {
   return g_object_new (MAIL_TYPE_APPLICATION,
-                       "application-id", GNOME_MAIL_APP_ID,
-                       "resource-base-path", "/org/gnome/Mail",
+                       "application-id", MAGPIE_APP_ID,
+                       "resource-base-path", "/org/gnome/Magpie",
                        "flags", G_APPLICATION_DEFAULT_FLAGS,
                        NULL);
 }

@@ -1,7 +1,7 @@
-# GNOME Mail
+# Magpie
 
-A modern, native GNOME mail client. C + GTK4 + libadwaita, built on top
-of `GNOME Online Accounts` for account discovery, with provider-specific
+A native GNOME mail client. C + GTK4 + libadwaita, built on top of
+`GNOME Online Accounts` for account discovery, with provider-specific
 backends for Microsoft Graph and IMAP.
 
 ## Goal
@@ -32,7 +32,7 @@ held-back features.
 These guide every code-level decision in the repo. They're listed first
 because they're how to evaluate a change, not just describe one.
 
-- **Native GNOME, not a port.** `org.gnome.Mail` app id, GTK4 widgets,
+- **Native GNOME, not a port.** `org.gnome.Magpie` app id, GTK4 widgets,
   libadwaita layout primitives (`AdwOverlaySplitView`,
   `AdwNavigationView`, `AdwHeaderBar`, `AdwWindowTitle`,
   `AdwStatusPage`). The HIG is the reference; if a behaviour clashes
@@ -149,7 +149,7 @@ mkdir -p build && cd build
 ../configure --prefix=$HOME/.local --enable-debug
 make -j$(nproc)
 make check
-./src/mail
+./src/magpie
 ```
 
 ## Developer tooling

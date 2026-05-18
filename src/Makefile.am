@@ -1,8 +1,8 @@
-# src/Makefile.am - Build the GNOME Mail executable.
+# src/Makefile.am - Build the Magpie executable.
 
-bin_PROGRAMS = mail
+bin_PROGRAMS = magpie
 
-mail_SOURCES = \
+magpie_SOURCES = \
     main.c \
     mail-arena.c \
     mail-arena.h \
@@ -47,7 +47,7 @@ mail_SOURCES = \
 BUILT_SOURCES = mail-resources.c
 CLEANFILES    = mail-resources.c
 
-GRESOURCE_XML  = $(top_srcdir)/data/org.gnome.Mail.gresource.xml
+GRESOURCE_XML  = $(top_srcdir)/data/org.gnome.Magpie.gresource.xml
 GRESOURCE_DEPS = \
     $(top_srcdir)/data/ui/window.ui \
     $(top_srcdir)/data/ui/style.css
@@ -58,7 +58,7 @@ mail-resources.c: $(GRESOURCE_XML) $(GRESOURCE_DEPS)
 
 AM_CPPFLAGS = \
     -I$(top_srcdir)/src \
-    -DGNOME_MAIL_DATADIR=\"$(datadir)\" \
+    -DMAGPIE_DATADIR=\"$(datadir)\" \
     $(GTK_CFLAGS) \
     $(ADWAITA_CFLAGS) \
     $(GOA_CFLAGS) \
@@ -68,7 +68,7 @@ AM_CPPFLAGS = \
     $(SQLITE_CFLAGS) \
     $(WEBKIT_CFLAGS)
 
-mail_LDADD = \
+magpie_LDADD = \
     $(GTK_LIBS) \
     $(ADWAITA_LIBS) \
     $(GOA_LIBS) \

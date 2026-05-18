@@ -1,4 +1,4 @@
-# tests/Makefile.am - Unit tests for GNOME Mail.
+# tests/Makefile.am - Unit tests for Magpie.
 
 UNIT_TESTS = test-arena test-accounts test-sidebar test-backend-contract test-message-list test-message-view test-mime test-imap-id test-imap-retry test-store test-backend-store test-sync test-eta test-account-page
 

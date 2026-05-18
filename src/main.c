@@ -1,4 +1,4 @@
-/* main.c - entry point for GNOME Mail. */
+/* main.c - entry point for Magpie. */
 
 #include "config.h"
 

@@ -1,9 +1,9 @@
 [Desktop Entry]
-Name=Mail
+Name=Magpie
 GenericName=Email Client
 Comment=Read and write email
-Exec=mail
-Icon=org.gnome.Mail
+Exec=magpie
+Icon=org.gnome.Magpie
 Terminal=false
 Type=Application
 StartupNotify=true

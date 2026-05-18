@@ -1,4 +1,4 @@
-/* mail-application.h - AdwApplication subclass for GNOME Mail. */
+/* mail-application.h - AdwApplication subclass for Magpie. */
 
 #pragma once
 

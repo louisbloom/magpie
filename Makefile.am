@@ -1,4 +1,4 @@
-# Makefile.am - Top-level automake file for GNOME Mail
+# Makefile.am - Top-level automake file for Magpie
 
 SUBDIRS = src data tests
 

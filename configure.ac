@@ -1,11 +1,11 @@
-dnl configure.ac - Autoconf configuration for GNOME Mail
+dnl configure.ac - Autoconf configuration for Magpie.
 dnl Process this file with autoconf to produce a configure script.
 
 AC_PREREQ([2.69])
-AC_INIT([mail],
+AC_INIT([magpie],
         m4_esyscmd_s([cat version 2>/dev/null || echo "0.0.0-unknown"]),
         [thomasc1971@hotmail.com],
-        [gnome-mail],
+        [magpie],
         [https://gitlab.gnome.org/])
 AC_CONFIG_SRCDIR([src/main.c])
 AC_CONFIG_HEADERS([config.h])
@@ -16,11 +16,11 @@ AM_INIT_AUTOMAKE([foreign subdir-objects -Wall -Werror])
 
 dnl Recompute the version at configure time so a rebuild after new
 dnl commits picks up the current version without re-running autoreconf.
-GNOME_MAIL_VERSION=`"$srcdir/build-aux/git-version.sh" "$srcdir" 2>/dev/null`
-AS_IF([test -z "$GNOME_MAIL_VERSION"],
-      [GNOME_MAIL_VERSION="$PACKAGE_VERSION"])
-AC_SUBST([GNOME_MAIL_VERSION])
-AC_MSG_NOTICE([GNOME Mail version: $GNOME_MAIL_VERSION])
+MAGPIE_VERSION=`"$srcdir/build-aux/git-version.sh" "$srcdir" 2>/dev/null`
+AS_IF([test -z "$MAGPIE_VERSION"],
+      [MAGPIE_VERSION="$PACKAGE_VERSION"])
+AC_SUBST([MAGPIE_VERSION])
+AC_MSG_NOTICE([Magpie version: $MAGPIE_VERSION])
 
 dnl Programs
 AC_PROG_CC
@@ -65,8 +65,8 @@ AC_CHECK_LIB([etpan], [mailimap_new], [LIBETPAN_LIBS="-letpan"],
              [AC_MSG_ERROR([libetpan does not export mailimap_new (install libetpan-devel).])])
 AC_SUBST([LIBETPAN_LIBS])
 
-AC_DEFINE_UNQUOTED([GNOME_MAIL_VERSION], ["$GNOME_MAIL_VERSION"], [Version string])
-AC_DEFINE([GNOME_MAIL_APP_ID], ["org.gnome.Mail"], [Application id])
+AC_DEFINE_UNQUOTED([MAGPIE_VERSION], ["$MAGPIE_VERSION"], [Version string])
+AC_DEFINE([MAGPIE_APP_ID], ["org.gnome.Magpie"], [Application id])
 AC_DEFINE([GOA_API_IS_SUBJECT_TO_CHANGE], [1], [Acknowledge libgoa's unstable API])
 
 AC_CONFIG_FILES([
@@ -79,7 +79,7 @@ AC_CONFIG_FILES([
 AC_OUTPUT
 
 AC_MSG_NOTICE([])
-AC_MSG_NOTICE([  GNOME Mail $GNOME_MAIL_VERSION configured])
+AC_MSG_NOTICE([  Magpie $MAGPIE_VERSION configured])
 AC_MSG_NOTICE([    prefix:  $prefix])
 AC_MSG_NOTICE([    CFLAGS:  $CFLAGS])
 AC_MSG_NOTICE([    debug:   $enable_debug])
