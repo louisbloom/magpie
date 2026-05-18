@@ -618,6 +618,6 @@ mail_backend_msgraph_new (GoaObject *goa_object)
   self->goa_object = g_object_ref (goa_object);
   self->oauth2 = oauth2;
   self->session = soup_session_new ();
-  soup_session_set_user_agent (self->session, "GNOME-Mail/0 ");
+  soup_session_set_user_agent (self->session, "Magpie/0 ");
   return (MailBackend *) self;
 }
