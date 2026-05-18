@@ -723,6 +723,71 @@ test_fallback_when_no_batched_vt (void)
   rm_rf (root);
 }
 
+/* Pin the unread/total propagation path: a backend's reported
+ * counts must reach the sqlite folders table and come back out
+ * through mail_store_list_folders. The sidebar drives its numeric
+ * badge off MailFolder.unread_count on the rows that
+ * mail-backend-store returns from exactly this path. Backstory:
+ * the IMAP backend used to hardcode both fields to zero, so the
+ * pipeline was correct but the input was always (0, 0); pinning
+ * the pipeline here means a future refactor that drops the counts
+ * along the way trips an obvious failure regardless of which
+ * backend is to blame. */
+static void
+test_folder_unread_and_total_persist_through_sync (void)
+{
+  g_autoptr (GError) error = NULL;
+  g_autofree char *root = g_dir_make_tmp ("mail-sync-XXXXXX", &error);
+  g_assert_no_error (error);
+  MailStore *local = mail_store_open (root, "u@example.com", &error);
+  g_assert_no_error (error);
+
+  MailBackend *remote = mail_backend_fake_new ();
+  /* Three folders covering the three cases the sidebar discriminates:
+   * unread > 0 (badge + bold), unread == 0 with total > 0 (no badge,
+   * plain name, tooltip with the total), and unread == total (all
+   * messages unseen — a freshly-imported folder). */
+  const FakeFolderSpec folders[] = {
+    { "f-inbox", "Inbox", NULL, 4, 10 },
+    { "f-sent", "Sent", NULL, 0, 5 },
+    { "f-junk", "Junk", NULL, 12, 12 },
+  };
+  mail_backend_fake_set_folders (remote, folders, G_N_ELEMENTS (folders));
+
+  MailSync *sync = mail_sync_new ();
+  run_to_completion (sync, remote, local, NULL);
+
+  MailArena arena;
+  mail_arena_init (&arena, 4096);
+  GPtrArray *rows = mail_store_list_folders (local, &arena, &error);
+  g_assert_no_error (error);
+  g_assert_cmpuint (rows->len, ==, G_N_ELEMENTS (folders));
+
+  for (gsize i = 0; i < G_N_ELEMENTS (folders); i++)
+    {
+      const FakeFolderSpec *want = &folders[i];
+      gboolean found = FALSE;
+      for (guint j = 0; j < rows->len; j++)
+        {
+          MailFolder *got = g_ptr_array_index (rows, j);
+          if (g_strcmp0 (got->id, want->id) != 0)
+            continue;
+          g_assert_cmpint (got->unread_count, ==, want->unread);
+          g_assert_cmpint (got->total_count, ==, want->total);
+          found = TRUE;
+          break;
+        }
+      g_assert_true (found);
+    }
+
+  g_ptr_array_unref (rows);
+  mail_arena_destroy (&arena);
+  g_object_unref (sync);
+  mail_backend_destroy (remote);
+  mail_store_close (local);
+  rm_rf (root);
+}
+
 int
 main (int argc,
       char **argv)
@@ -739,5 +804,6 @@ main (int argc,
   g_test_add_func ("/mail-sync/dedup-across-passes", test_dedup_across_passes);
   g_test_add_func ("/mail-sync/fetch-uses-batched", test_fetch_uses_batched_when_available);
   g_test_add_func ("/mail-sync/fallback-when-no-batched-vt", test_fallback_when_no_batched_vt);
+  g_test_add_func ("/mail-sync/folder-counts-persist", test_folder_unread_and_total_persist_through_sync);
   return g_test_run ();
 }

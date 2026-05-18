@@ -363,6 +363,62 @@ flags_contain_seen (struct mailimap_msg_att_dynamic *dyn)
 
 /* --- worker: list_folders ------------------------------------- */
 
+/* Walk a STATUS response's info list and copy MESSAGES/UNSEEN into
+ * the caller's slots. Other attributes (RECENT, UIDNEXT…) are
+ * ignored — we don't request them. */
+static void
+status_extract_counts (struct mailimap_mailbox_data_status *data,
+                       int *unread_out,
+                       int *total_out)
+{
+  if (data == NULL || data->st_info_list == NULL)
+    return;
+  for (clistiter *it = clist_begin (data->st_info_list); it != NULL; it = clist_next (it))
+    {
+      struct mailimap_status_info *info = clist_content (it);
+      if (info == NULL)
+        continue;
+      if (info->st_att == MAILIMAP_STATUS_ATT_UNSEEN)
+        *unread_out = (int) info->st_value;
+      else if (info->st_att == MAILIMAP_STATUS_ATT_MESSAGES)
+        *total_out = (int) info->st_value;
+    }
+}
+
+/* Issue STATUS for one mailbox to fill unread/total. A transport-
+ * fatal rc propagates upward so run_with_auth_retry can reconnect
+ * and retry. A non-transport failure (a quirky server returning NO
+ * for one mailbox) logs a warning and returns TRUE with the counts
+ * left at their initial zero — the user still gets counts for the
+ * other folders rather than the whole list_folders failing. */
+static gboolean
+fetch_folder_status_locked (MailBackendIMAP *self,
+                            const char *mailbox,
+                            struct mailimap_status_att_list *att_list,
+                            int *unread_out,
+                            int *total_out,
+                            GError **error)
+{
+  struct mailimap_mailbox_data_status *result = NULL;
+  int rc = mailimap_status (self->imap, mailbox, att_list, &result);
+  if (!imap_rc_ok (rc))
+    {
+      if (is_transport_fatal (rc))
+        {
+          set_imap_error (error, rc, "STATUS");
+          drop_connection_locked (self);
+          return FALSE;
+        }
+      g_warning ("IMAP STATUS failed for \"%s\" (libetpan rc=%d); "
+                 "leaving unread/total at 0",
+                 mailbox, rc);
+      return TRUE;
+    }
+  status_extract_counts (result, unread_out, total_out);
+  mailimap_mailbox_data_status_free (result);
+  return TRUE;
+}
+
 static GPtrArray *
 worker_list_folders (MailBackendIMAP *self, GError **error)
 {
@@ -393,6 +449,27 @@ worker_list_folders (MailBackendIMAP *self, GError **error)
       g_ptr_array_add (out, f);
     }
   mailimap_list_result_free (result);
+
+  /* Second pass: ask the server for UNSEEN/MESSAGES per selectable
+   * folder. LIST itself doesn't carry counts in IMAP; STATUS does
+   * (RFC 3501 §6.3.10), non-destructively, one round-trip per
+   * mailbox. The att_list is reused across folders. */
+  struct mailimap_status_att_list *att_list = mailimap_status_att_list_new_empty ();
+  mailimap_status_att_list_add (att_list, MAILIMAP_STATUS_ATT_MESSAGES);
+  mailimap_status_att_list_add (att_list, MAILIMAP_STATUS_ATT_UNSEEN);
+  for (guint i = 0; i < out->len; i++)
+    {
+      MailFolder *f = g_ptr_array_index (out, i);
+      if (!fetch_folder_status_locked (self, f->id, att_list,
+                                       &f->unread_count, &f->total_count,
+                                       error))
+        {
+          mailimap_status_att_list_free (att_list);
+          g_ptr_array_unref (out);
+          return NULL;
+        }
+    }
+  mailimap_status_att_list_free (att_list);
   return out;
 }
 
