@@ -378,6 +378,71 @@ test_markup_special_chars (void)
   mail_backend_destroy (fake);
 }
 
+/* Backend MESSAGE_FLAGS events on the currently loaded folder must
+ * update the matching row's unread bit in place, without a reload.
+ * Other folders are no-ops; events for unknown messages are dropped.
+ *
+ * The fixture seeded m2 as unread; flipping it via a synthetic event
+ * has to flip meta->unread and emit items-changed so factory_bind
+ * drops the "heading" CSS class on next bind. */
+/* Helper: locate a row by message id; G_MAXUINT if not present. */
+static guint
+find_row_by_id (Fixture *f,
+                const char *message_id)
+{
+  GListModel *model = _mail_message_list_get_model_for_test (f->list);
+  guint n = g_list_model_get_n_items (model);
+  for (guint i = 0; i < n; i++)
+    {
+      const MailMessageMeta *meta = _mail_message_list_get_meta_for_test (f->list, i);
+      if (meta != NULL && g_strcmp0 (meta->id, message_id) == 0)
+        return i;
+    }
+  return G_MAXUINT;
+}
+
+static void
+test_backend_flags_event_updates_row (Fixture *f, gconstpointer ud)
+{
+  /* Fixture seeded m2 as unread; the rest are read. Emit MESSAGE_FLAGS
+   * for m2 with unread=FALSE and verify the row's meta bit flipped
+   * (factory_bind would then strip the heading class on next bind). */
+  guint m2 = find_row_by_id (f, "m2");
+  g_assert_cmpuint (m2, !=, G_MAXUINT);
+  g_assert_true (_mail_message_list_get_meta_for_test (f->list, m2)->unread);
+
+  MailBackendChange event = {
+    .kind = MAIL_BACKEND_CHANGE_MESSAGE_FLAGS,
+    .folder_id = "inbox",
+    .message_id = "m2",
+    .unread = FALSE,
+  };
+  mail_backend_emit_change (f->fake, &event);
+  g_assert_false (_mail_message_list_get_meta_for_test (f->list, m2)->unread);
+
+  /* Events naming a different folder must be dropped — the row's bit
+   * survives untouched even if the message_id matches one we hold. */
+  guint m3 = find_row_by_id (f, "m3");
+  gboolean m3_unread_before = _mail_message_list_get_meta_for_test (f->list, m3)->unread;
+  MailBackendChange other = {
+    .kind = MAIL_BACKEND_CHANGE_MESSAGE_FLAGS,
+    .folder_id = "drafts",
+    .message_id = "m3",
+    .unread = !m3_unread_before,
+  };
+  mail_backend_emit_change (f->fake, &other);
+  g_assert_cmpint (_mail_message_list_get_meta_for_test (f->list, m3)->unread, ==, m3_unread_before);
+
+  /* Events naming an unknown message id are a silent no-op. */
+  MailBackendChange unknown = {
+    .kind = MAIL_BACKEND_CHANGE_MESSAGE_FLAGS,
+    .folder_id = "inbox",
+    .message_id = "no-such-id",
+    .unread = TRUE,
+  };
+  mail_backend_emit_change (f->fake, &unknown);
+}
+
 /* Pin the year-aware date formatting in the list. Backstory: the
  * subtitle column used to render every date older than today as
  * "Mon  D", so a message from 2025-02-16 and one from 2026-02-16
@@ -441,6 +506,8 @@ main (int argc,
               Fixture, NULL, fixture_set_up, test_activation_emits_signal, fixture_tear_down);
   g_test_add ("/message-list/mark-read-flips-unread",
               Fixture, NULL, fixture_set_up, test_mark_read_flips_unread, fixture_tear_down);
+  g_test_add ("/message-list/backend-flags-event-updates-row",
+              Fixture, NULL, fixture_set_up, test_backend_flags_event_updates_row, fixture_tear_down);
   g_test_add ("/message-list/large-folder-virtualises",
               Fixture, NULL, fixture_set_up, test_large_folder_virtualises_rows, fixture_tear_down);
   g_test_add ("/message-list/no-warnings-when-realized",

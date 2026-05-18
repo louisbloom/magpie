@@ -97,6 +97,93 @@ test_folder_row_is_activatable (Fixture *f, gconstpointer ud)
   g_assert_true (gtk_list_box_row_get_activatable (folder));
 }
 
+/* Inspect a folder row and return the trailing badge label's text, or
+ * NULL if no badge widget is present (unread==0). The row layout is:
+ *   GtkListBoxRow -> GtkBox -> [GtkImage, GtkLabel (title), GtkLabel (badge)?] */
+static char *
+badge_text_at (GtkListBox *list_box,
+               int row_index)
+{
+  GtkListBoxRow *row = gtk_list_box_get_row_at_index (list_box, row_index);
+  if (row == NULL)
+    return NULL;
+  GtkWidget *hbox = gtk_list_box_row_get_child (row);
+  if (hbox == NULL)
+    return NULL;
+  GtkWidget *icon = gtk_widget_get_first_child (hbox);
+  if (icon == NULL)
+    return NULL;
+  GtkWidget *title = gtk_widget_get_next_sibling (icon);
+  if (title == NULL)
+    return NULL;
+  GtkWidget *badge = gtk_widget_get_next_sibling (title);
+  if (badge == NULL)
+    return NULL;
+  g_assert_true (GTK_IS_LABEL (badge));
+  return g_strdup (gtk_label_get_text (GTK_LABEL (badge)));
+}
+
+static gboolean
+title_has_heading_at (GtkListBox *list_box,
+                      int row_index)
+{
+  GtkListBoxRow *row = gtk_list_box_get_row_at_index (list_box, row_index);
+  GtkWidget *hbox = gtk_list_box_row_get_child (row);
+  GtkWidget *icon = gtk_widget_get_first_child (hbox);
+  GtkWidget *title = gtk_widget_get_next_sibling (icon);
+  return gtk_widget_has_css_class (title, "heading");
+}
+
+/* When the backend emits FOLDER_COUNTS for a folder the sidebar shows,
+ * the row's unread badge must update in place — no full reload. This
+ * is the load-bearing assertion for requirement #1: clicking a mail
+ * locally and an external mutt mark-read both reach this path. */
+static void
+test_folder_counts_event_updates_badge (Fixture *f, gconstpointer ud)
+{
+  GtkListBox *list_box = _mail_sidebar_get_list_box_for_test (f->sidebar);
+  /* Fixture: [account, Inbox(unread=5), Drafts(unread=0)]. */
+  g_autofree char *initial = badge_text_at (list_box, 1);
+  g_assert_cmpstr (initial, ==, "5");
+  g_assert_true (title_has_heading_at (list_box, 1));
+  /* Drafts has unread=0, so no badge. */
+  g_autofree char *drafts_initial = badge_text_at (list_box, 2);
+  g_assert_null (drafts_initial);
+
+  MailBackendChange tick_down = {
+    .kind = MAIL_BACKEND_CHANGE_FOLDER_COUNTS,
+    .folder_id = "inbox",
+    .folder_unread = 3,
+    .folder_total = 10,
+  };
+  mail_backend_emit_change (f->fake, &tick_down);
+  pump_main_loop ();
+  g_autofree char *after = badge_text_at (list_box, 1);
+  g_assert_cmpstr (after, ==, "3");
+  g_assert_true (title_has_heading_at (list_box, 1));
+
+  /* Drop to zero: badge disappears, heading class clears. */
+  MailBackendChange clear = {
+    .kind = MAIL_BACKEND_CHANGE_FOLDER_COUNTS,
+    .folder_id = "inbox",
+    .folder_unread = 0,
+    .folder_total = 10,
+  };
+  mail_backend_emit_change (f->fake, &clear);
+  pump_main_loop ();
+  g_autofree char *cleared = badge_text_at (list_box, 1);
+  g_assert_null (cleared);
+  g_assert_false (title_has_heading_at (list_box, 1));
+
+  /* Events naming an unknown folder are dropped silently. */
+  MailBackendChange unknown = {
+    .kind = MAIL_BACKEND_CHANGE_FOLDER_COUNTS,
+    .folder_id = "no-such-folder",
+    .folder_unread = 99,
+  };
+  mail_backend_emit_change (f->fake, &unknown);
+}
+
 static void
 test_folder_row_is_compact (Fixture *f, gconstpointer ud)
 {
@@ -414,6 +501,8 @@ main (int argc,
               Fixture, NULL, fixture_set_up, test_folder_row_is_activatable, fixture_tear_down);
   g_test_add ("/sidebar/folder-row-compact",
               Fixture, NULL, fixture_set_up, test_folder_row_is_compact, fixture_tear_down);
+  g_test_add ("/sidebar/folder-counts-event-updates-badge",
+              Fixture, NULL, fixture_set_up, test_folder_counts_event_updates_badge, fixture_tear_down);
   g_test_add ("/sidebar/account-row-aligns-with-folder-rows",
               Fixture, NULL, fixture_set_up, test_account_row_aligns_with_folder_rows, fixture_tear_down);
   g_test_add_func ("/sidebar/natural-width-grows-with-identity",

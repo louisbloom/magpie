@@ -75,6 +75,12 @@ struct _MailMessageList
    * backend, plus a cancellable we can cancel on subsequent loads. */
   MailBackend *current_backend; /* borrowed */
   GCancellable *cancellable;
+
+  /* Subscription to current_backend's change signal, plus the loaded
+   * folder id so the handler can ignore events for other folders. The
+   * listener is rebound on every load and dropped in dispose. */
+  guint backend_listener_id;
+  char *current_folder_id; /* g_strdup; tracks the most recently loaded folder */
 };
 
 G_DEFINE_FINAL_TYPE (MailMessageList, mail_message_list, GTK_TYPE_WIDGET)
@@ -228,14 +234,14 @@ on_list_view_activate (GtkListView *list_view,
                  self->current_backend, item->meta->id, item->meta->subject);
 }
 
-void
-mail_message_list_mark_read (MailMessageList *self,
-                             const char *message_id)
+/* Find the row for @message_id and force a rebind with the new unread
+ * bit. Borrowed arena memory is mutated in place — see the const-vs-
+ * enforcement note inline. */
+static void
+apply_unread_bit (MailMessageList *self,
+                  const char *message_id,
+                  gboolean unread)
 {
-  g_return_if_fail (MAIL_IS_MESSAGE_LIST (self));
-  if (message_id == NULL)
-    return;
-
   guint n = g_list_model_get_n_items (G_LIST_MODEL (self->store));
   for (guint i = 0; i < n; i++)
     {
@@ -245,8 +251,8 @@ mail_message_list_mark_read (MailMessageList *self,
       if (g_strcmp0 (item->meta->id, message_id) != 0)
         continue;
 
-      if (!item->meta->unread)
-        return; /* already styled as read; nothing to refresh */
+      if (item->meta->unread == unread)
+        return; /* nothing to refresh */
 
       /* The MailMessageMeta is borrowed from the backend's arena. The
        * `const` on the row item's pointer is borrow discipline (so
@@ -255,10 +261,41 @@ mail_message_list_mark_read (MailMessageList *self,
        * lets the next bind pick up the new value; emitting
        * items-changed on the row drives GtkListView to rebind it. */
       MailMessageMeta *meta = (MailMessageMeta *) item->meta;
-      meta->unread = FALSE;
+      meta->unread = unread;
       g_list_model_items_changed (G_LIST_MODEL (self->store), i, 1, 1);
       return;
     }
+}
+
+void
+mail_message_list_mark_read (MailMessageList *self,
+                             const char *message_id)
+{
+  g_return_if_fail (MAIL_IS_MESSAGE_LIST (self));
+  if (message_id == NULL)
+    return;
+  apply_unread_bit (self, message_id, FALSE);
+}
+
+/* MailBackendChange handler. Updates the row that matches the event,
+ * but only when the event names the currently loaded folder — events
+ * for sibling folders are no-ops. The local-read path also calls
+ * mail_message_list_mark_read synchronously (mail-window.c:168) which
+ * is idempotent given apply_unread_bit's "nothing to refresh" guard. */
+static void
+on_backend_change (MailBackend *backend,
+                   const MailBackendChange *change,
+                   gpointer user_data)
+{
+  (void) backend;
+  MailMessageList *self = user_data;
+  if (change->kind != MAIL_BACKEND_CHANGE_MESSAGE_FLAGS)
+    return;
+  if (change->folder_id == NULL || change->message_id == NULL)
+    return;
+  if (g_strcmp0 (change->folder_id, self->current_folder_id) != 0)
+    return;
+  apply_unread_bit (self, change->message_id, change->unread);
 }
 
 /* --- load -------------------------------------------------------- */
@@ -319,7 +356,21 @@ mail_message_list_load (MailMessageList *self,
   g_clear_object (&self->cancellable);
   self->cancellable = g_cancellable_new ();
 
+  /* Rebind the backend change subscription if the backend changed.
+   * The single subscription covers every loaded folder — the handler
+   * filters by current_folder_id so events for other folders are
+   * dropped on the floor. */
+  if (backend != self->current_backend)
+    {
+      if (self->backend_listener_id != 0 && self->current_backend != NULL)
+        mail_backend_remove_listener (self->current_backend, self->backend_listener_id);
+      self->backend_listener_id = mail_backend_add_listener (backend, on_backend_change, self, NULL);
+    }
   self->current_backend = backend;
+
+  g_free (self->current_folder_id);
+  self->current_folder_id = g_strdup (folder_id);
+
   g_list_store_remove_all (self->store);
   gtk_stack_set_visible_child_name (self->stack, "loading");
 
@@ -374,6 +425,14 @@ static void
 mail_message_list_dispose (GObject *object)
 {
   MailMessageList *self = MAIL_MESSAGE_LIST (object);
+
+  if (self->backend_listener_id != 0 && self->current_backend != NULL)
+    {
+      mail_backend_remove_listener (self->current_backend, self->backend_listener_id);
+      self->backend_listener_id = 0;
+    }
+  self->current_backend = NULL;
+  g_clear_pointer (&self->current_folder_id, g_free);
 
   if (self->cancellable != NULL)
     g_cancellable_cancel (self->cancellable);

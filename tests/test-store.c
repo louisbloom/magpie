@@ -884,6 +884,138 @@ probe_notify (gpointer user_data)
   p->destroyed++;
 }
 
+/* Recording listener for emit-path tests. Collects every change in
+ * order so the test can assert exact event payloads. */
+typedef struct
+{
+  MailStoreChangeKind kind;
+  char *folder_id;
+  char *message_id;
+  gboolean unread;
+  int folder_unread;
+  int folder_total;
+} RecordedChange;
+
+typedef struct
+{
+  GArray *changes; /* of RecordedChange */
+} ChangeRecorder;
+
+static void
+recorder_init (ChangeRecorder *r)
+{
+  r->changes = g_array_new (FALSE, FALSE, sizeof (RecordedChange));
+  g_array_set_clear_func (r->changes, (GDestroyNotify) (void (*) (RecordedChange *)) NULL);
+}
+
+static void
+recorder_destroy (ChangeRecorder *r)
+{
+  for (guint i = 0; i < r->changes->len; i++)
+    {
+      RecordedChange *rc = &g_array_index (r->changes, RecordedChange, i);
+      g_free (rc->folder_id);
+      g_free (rc->message_id);
+    }
+  g_array_free (r->changes, TRUE);
+}
+
+static void
+recorder_cb (const MailStoreChange *change,
+             gpointer user_data)
+{
+  ChangeRecorder *r = user_data;
+  RecordedChange rc = {
+    .kind = change->kind,
+    .folder_id = g_strdup (change->folder_id),
+    .message_id = g_strdup (change->message_id),
+    .unread = change->unread,
+    .folder_unread = change->folder_unread,
+    .folder_total = change->folder_total,
+  };
+  g_array_append_val (r->changes, rc);
+}
+
+static void
+test_set_unread_emits_flags_and_counts (Fixture *f,
+                                        gconstpointer data)
+{
+  g_autoptr (GError) error = NULL;
+  /* Two unread messages in one folder; mark one as read and inspect
+   * the events the listener saw. */
+  g_assert_true (mail_store_upsert_folder (f->store, "rid-INBOX", "INBOX", NULL, NULL, &error));
+  const char *payload = "Subject: hi\r\n\r\nbody\r\n";
+  g_autoptr (GBytes) in = g_bytes_new_static (payload, strlen (payload));
+  g_autofree char *n1 = NULL;
+  g_autofree char *n2 = NULL;
+  g_assert_true (mail_store_write_raw (f->store, "INBOX", in, FALSE, &n1, &error));
+  g_assert_true (mail_store_write_raw (f->store, "INBOX", in, FALSE, &n2, &error));
+  g_assert_true (mail_store_upsert_message (f->store, "rid-INBOX", "m1", NULL, n1,
+                                            NULL, NULL, 0, TRUE, &error));
+  g_assert_true (mail_store_upsert_message (f->store, "rid-INBOX", "m2", NULL, n2,
+                                            NULL, NULL, 0, TRUE, &error));
+
+  ChangeRecorder rec;
+  recorder_init (&rec);
+  guint id = mail_store_add_listener (f->store, recorder_cb, &rec, NULL);
+
+  g_assert_true (mail_store_set_message_unread (f->store, "m1", FALSE, &error));
+  g_assert_no_error (error);
+
+  g_assert_cmpuint (rec.changes->len, ==, 2);
+  RecordedChange *e0 = &g_array_index (rec.changes, RecordedChange, 0);
+  g_assert_cmpint (e0->kind, ==, MAIL_STORE_CHANGE_MESSAGE_FLAGS);
+  g_assert_cmpstr (e0->folder_id, ==, "rid-INBOX");
+  g_assert_cmpstr (e0->message_id, ==, "m1");
+  g_assert_false (e0->unread);
+  RecordedChange *e1 = &g_array_index (rec.changes, RecordedChange, 1);
+  g_assert_cmpint (e1->kind, ==, MAIL_STORE_CHANGE_FOLDER_COUNTS);
+  g_assert_cmpstr (e1->folder_id, ==, "rid-INBOX");
+  g_assert_null (e1->message_id);
+  g_assert_cmpint (e1->folder_unread, ==, 1); /* one remaining unread (m2) */
+  g_assert_cmpint (e1->folder_total, ==, 2);
+
+  mail_store_remove_listener (f->store, id);
+  recorder_destroy (&rec);
+}
+
+static void
+test_set_unread_noop_emits_nothing (Fixture *f,
+                                    gconstpointer data)
+{
+  g_autoptr (GError) error = NULL;
+  g_assert_true (mail_store_upsert_folder (f->store, "rid-INBOX", "INBOX", NULL, NULL, &error));
+  /* Upsert a message that's already read; ask to set unread=FALSE
+   * (already read) and verify no events fire. The on-disk basename
+   * already lacks 'S' if we never wrote it as seen, so we have to
+   * use a basename that already has :2,S. Write seen=TRUE so the
+   * file is named with :2,S and the row's unread is FALSE. */
+  const char *payload = "Subject: hi\r\n\r\nbody\r\n";
+  g_autoptr (GBytes) in = g_bytes_new_static (payload, strlen (payload));
+  g_autofree char *name = NULL;
+  g_assert_true (mail_store_write_raw (f->store, "INBOX", in, TRUE /*seen*/, &name, &error));
+  g_assert_true (mail_store_upsert_message (f->store, "rid-INBOX", "m1", NULL, name,
+                                            NULL, NULL, 0, FALSE /*already read*/, &error));
+
+  ChangeRecorder rec;
+  recorder_init (&rec);
+  guint id = mail_store_add_listener (f->store, recorder_cb, &rec, NULL);
+
+  /* The basename already encodes :2,S so the rename is a no-op; no
+   * events should fire (mail-store.c short-circuits this path). */
+  g_assert_true (mail_store_set_message_unread (f->store, "m1", FALSE, &error));
+  g_assert_no_error (error);
+  g_assert_cmpuint (rec.changes->len, ==, 0);
+
+  /* Unknown message id is also silent. */
+  g_assert_true (mail_store_set_message_unread (f->store, "no-such-id", FALSE, &error));
+  g_assert_no_error (error);
+  g_assert_cmpuint (rec.changes->len, ==, 0);
+
+  mail_store_remove_listener (f->store, id);
+  recorder_destroy (&rec);
+}
+
 static void
 test_listener_remove_runs_destroy_notify (Fixture *f,
                                           gconstpointer data)
@@ -977,6 +1109,8 @@ main (int argc,
   ADD ("listener-remove-runs-destroy-notify", test_listener_remove_runs_destroy_notify);
   ADD ("listener-close-runs-destroy-notify", test_listener_close_runs_destroy_notify);
   ADD ("listener-remove-id-zero-is-noop", test_listener_remove_id_zero_is_noop);
+  ADD ("set-unread-emits-flags-and-counts", test_set_unread_emits_flags_and_counts);
+  ADD ("set-unread-noop-emits-nothing", test_set_unread_noop_emits_nothing);
   ADD ("application-id-stamped", test_application_id_is_magpie);
   ADD ("set-message-unread-renames", test_set_message_unread_renames_and_updates);
   ADD ("reconcile-folder-from-disk", test_reconcile_folder_from_disk);

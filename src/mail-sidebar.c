@@ -106,9 +106,21 @@ struct _MailSidebar
   GListStore *store;     /* of MailSidebarItem */
   GoaClient *goa_client; /* may be NULL while loading */
   GPtrArray *accounts;   /* of MailAccount* (owned) */
+  /* Parallel to self->accounts: the backend listener id we registered
+   * for that account's store_backend, plus the heap-allocated context
+   * we passed as user_data. Unsubscribed in dispose before the
+   * accounts (and the backends they own) are freed. */
+  GArray *backend_listener_ids;     /* of guint */
+  GPtrArray *backend_listener_ctxs; /* of BackendListenerCtx*; freed in dispose */
   GCancellable *cancellable;
   gboolean goa_started; /* GoaClient creation kicked off on first realize */
 };
+
+typedef struct
+{
+  MailSidebar *sidebar; /* borrowed */
+  MailAccount *acct;    /* borrowed */
+} BackendListenerCtx;
 
 enum
 {
@@ -369,6 +381,39 @@ on_list_folders_done (GObject *source,
   g_free (ctx);
 }
 
+/* MailBackendChange handler. The user_data names which account these
+ * events belong to so the row-walk skips items from other accounts
+ * (folder_ids can collide across accounts). For FOLDER_COUNTS we
+ * write the absolute new unread back into the matching MailSidebarItem
+ * and force a row rebuild via items-changed. */
+static void
+on_backend_change (MailBackend *backend,
+                   const MailBackendChange *change,
+                   gpointer user_data)
+{
+  (void) backend;
+  BackendListenerCtx *ctx = user_data;
+  if (change->kind != MAIL_BACKEND_CHANGE_FOLDER_COUNTS)
+    return;
+  if (change->folder_id == NULL)
+    return;
+  MailSidebar *self = ctx->sidebar;
+  guint n = g_list_model_get_n_items (G_LIST_MODEL (self->store));
+  for (guint i = 0; i < n; i++)
+    {
+      g_autoptr (MailSidebarItem) it = g_list_model_get_item (G_LIST_MODEL (self->store), i);
+      if (it == NULL || it->kind != MAIL_SIDEBAR_ITEM_FOLDER)
+        continue;
+      if (it->account != ctx->acct)
+        continue;
+      if (g_strcmp0 (it->folder_id, change->folder_id) != 0)
+        continue;
+      it->unread = change->folder_unread;
+      g_list_model_items_changed (G_LIST_MODEL (self->store), i, 1, 1);
+      return;
+    }
+}
+
 static void
 sidebar_add_account (MailSidebar *self,
                      MailAccount *acct)
@@ -381,11 +426,26 @@ sidebar_add_account (MailSidebar *self,
 
   if (acct->store_backend != NULL)
     {
+      BackendListenerCtx *bctx = g_new (BackendListenerCtx, 1);
+      bctx->sidebar = self;
+      bctx->acct = acct;
+      guint id = mail_backend_add_listener (acct->store_backend, on_backend_change,
+                                            bctx, NULL);
+      g_array_append_val (self->backend_listener_ids, id);
+      g_ptr_array_add (self->backend_listener_ctxs, bctx);
+
       LoadFoldersCtx *ctx = g_new (LoadFoldersCtx, 1);
       ctx->self = g_object_ref (self);
       ctx->acct = acct;
       mail_backend_list_folders_async (acct->store_backend, self->cancellable,
                                        on_list_folders_done, ctx);
+    }
+  else
+    {
+      /* Keep arrays parallel to self->accounts even when no backend. */
+      guint zero = 0;
+      g_array_append_val (self->backend_listener_ids, zero);
+      g_ptr_array_add (self->backend_listener_ctxs, NULL);
     }
 
   g_signal_emit (self, signals[SIGNAL_ACCOUNT_ADDED], 0, acct);
@@ -484,6 +544,18 @@ mail_sidebar_dispose (GObject *object)
 
   if (self->accounts != NULL)
     {
+      /* Unsubscribe each backend listener BEFORE the account (and its
+       * backend) is freed — the listener's user_data points into the
+       * BackendListenerCtx we own here, and the backend's destroy
+       * would invoke any registered GDestroyNotify hooks pointing at
+       * memory we're about to free. */
+      for (guint i = 0; i < self->accounts->len; i++)
+        {
+          MailAccount *acct = g_ptr_array_index (self->accounts, i);
+          guint id = g_array_index (self->backend_listener_ids, guint, i);
+          if (id != 0 && acct->store_backend != NULL)
+            mail_backend_remove_listener (acct->store_backend, id);
+        }
       for (guint i = 0; i < self->accounts->len; i++)
         mail_account_free (g_ptr_array_index (self->accounts, i));
       g_ptr_array_set_size (self->accounts, 0);
@@ -506,6 +578,10 @@ mail_sidebar_finalize (GObject *object)
   MailSidebar *self = MAIL_SIDEBAR (object);
   if (self->accounts != NULL)
     g_ptr_array_unref (self->accounts);
+  if (self->backend_listener_ids != NULL)
+    g_array_unref (self->backend_listener_ids);
+  if (self->backend_listener_ctxs != NULL)
+    g_ptr_array_unref (self->backend_listener_ctxs);
   G_OBJECT_CLASS (mail_sidebar_parent_class)->finalize (object);
 }
 
@@ -559,6 +635,8 @@ mail_sidebar_init (MailSidebar *self)
 {
   self->store = g_list_store_new (MAIL_TYPE_SIDEBAR_ITEM);
   self->accounts = g_ptr_array_new ();
+  self->backend_listener_ids = g_array_new (FALSE, FALSE, sizeof (guint));
+  self->backend_listener_ctxs = g_ptr_array_new_with_free_func (g_free);
   self->cancellable = g_cancellable_new ();
 
   GtkWidget *scroller = gtk_scrolled_window_new ();

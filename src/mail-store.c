@@ -51,6 +51,7 @@ struct _MailStore
   sqlite3_stmt *st_message_location_by_content_key;
   sqlite3_stmt *st_message_delete;
   sqlite3_stmt *st_message_set_unread;
+  sqlite3_stmt *st_folder_counts;
 
   /* Scratch buffer used by upsert_folder to hand back a borrowed
    * pointer to the chosen dir_name (valid until the next upsert). */
@@ -402,7 +403,10 @@ prepare_statements (MailStore *self,
       " JOIN folders f ON f.stable_id = m.folder_stable_id"
       " WHERE f.remote_id = ?;" },
     { &self->st_message_location,
-      "SELECT f.dir_name, m.filename"
+      /* col 2 (folder remote_id) is read by mail_store_set_message_unread
+       * so it can name the affected folder in the FOLDER_COUNTS event;
+       * mail_store_message_location only reads cols 0/1. */
+      "SELECT f.dir_name, m.filename, f.remote_id"
       " FROM messages m"
       " JOIN folders f ON f.stable_id = m.folder_stable_id"
       " WHERE m.remote_id = ?;" },
@@ -418,6 +422,16 @@ prepare_statements (MailStore *self,
       " WHERE m.remote_id = ?;" },
     { &self->st_message_set_unread,
       "UPDATE messages SET filename = ?, unread = ? WHERE remote_id = ?;" },
+    { &self->st_folder_counts,
+      /* Per-folder absolute counts. Same shape as st_folder_list but
+       * for a single folder; the messages_folder_received index
+       * covers the per-folder LEFT JOIN. */
+      "SELECT COUNT(CASE WHEN m.unread = 1 THEN 1 END),"
+      "       COUNT(m.stable_id)"
+      " FROM folders f"
+      " LEFT JOIN messages m ON m.folder_stable_id = f.stable_id"
+      " WHERE f.remote_id = ?"
+      " GROUP BY f.stable_id;" },
   };
   for (gsize i = 0; i < G_N_ELEMENTS (table); i++)
     {
@@ -496,6 +510,7 @@ mail_store_close (MailStore *self)
     &self->st_message_location_by_content_key,
     &self->st_message_delete,
     &self->st_message_set_unread,
+    &self->st_folder_counts,
   };
   for (gsize i = 0; i < G_N_ELEMENTS (all); i++)
     if (*all[i] != NULL)
@@ -565,7 +580,7 @@ mail_store_remove_listener (MailStore *self,
     }
 }
 
-G_GNUC_UNUSED static void
+static void
 emit_change (MailStore *self,
              const MailStoreChange *change)
 {
@@ -578,6 +593,37 @@ emit_change (MailStore *self,
   memcpy (snap, self->listeners->data, n * sizeof (StoreListener));
   for (guint i = 0; i < n; i++)
     snap[i].cb (change, snap[i].user_data);
+}
+
+/* Query the per-folder live unread/total and emit a FOLDER_COUNTS
+ * event. Skipped early if no subscribers are registered, so the
+ * indexed COUNT does not run on the read path when nobody is
+ * listening (relevant for the test fixture and headless backends). */
+static void
+emit_folder_counts (MailStore *self,
+                    const char *folder_remote_id)
+{
+  if (self->listeners->len == 0)
+    return;
+  sqlite3_stmt *st = self->st_folder_counts;
+  sqlite3_reset (st);
+  sqlite3_bind_text (st, 1, folder_remote_id, -1, SQLITE_TRANSIENT);
+  int unread = 0;
+  int total = 0;
+  if (sqlite3_step (st) == SQLITE_ROW)
+    {
+      unread = sqlite3_column_int (st, 0);
+      total = sqlite3_column_int (st, 1);
+    }
+  MailStoreChange c = {
+    .kind = MAIL_STORE_CHANGE_FOLDER_COUNTS,
+    .folder_id = folder_remote_id,
+    .message_id = NULL,
+    .unread = FALSE,
+    .folder_unread = unread,
+    .folder_total = total,
+  };
+  emit_change (self, &c);
 }
 
 const char *
@@ -1025,17 +1071,21 @@ mail_store_set_message_unread (MailStore *self,
   /* Locate the on-disk file via the existing message-location join.
    * Inline the statement use (rather than calling the public API)
    * because the public version requires a MailArena and we just need
-   * private copies for the rename + UPDATE. */
+   * private copies for the rename + UPDATE. The third column carries
+   * the folder's remote_id, used to name the FOLDER_COUNTS event when
+   * subscribers are listening — same query, no extra round-trip. */
   sqlite3_stmt *loc = self->st_message_location;
   sqlite3_reset (loc);
   sqlite3_bind_text (loc, 1, remote_id, -1, SQLITE_TRANSIENT);
   g_autofree char *dir_name = NULL;
   g_autofree char *filename = NULL;
+  g_autofree char *folder_remote_id = NULL;
   int rc = sqlite3_step (loc);
   if (rc == SQLITE_ROW)
     {
       dir_name = g_strdup ((const char *) sqlite3_column_text (loc, 0));
       filename = g_strdup ((const char *) sqlite3_column_text (loc, 1));
+      folder_remote_id = g_strdup ((const char *) sqlite3_column_text (loc, 2));
     }
   else if (rc != SQLITE_DONE)
     {
@@ -1044,7 +1094,8 @@ mail_store_set_message_unread (MailStore *self,
     }
   /* Unknown message id is not an error: the local index may not have
    * caught up yet (e.g. the row was opened in a race with sync). The
-   * caller still got TRUE so its UI bookkeeping completes. */
+   * caller still got TRUE so its UI bookkeeping completes. No event
+   * is emitted in this branch — there's nothing locally to invalidate. */
   if (dir_name == NULL || filename == NULL)
     return TRUE;
 
@@ -1081,6 +1132,20 @@ mail_store_set_message_unread (MailStore *self,
       set_sqlite_error (error, self->db, "message set unread");
       return FALSE;
     }
+
+  /* Disk + sqlite agree on the new state. Notify subscribers in the
+   * same call frame so the message-list re-bind and sidebar badge
+   * update before this function returns. */
+  MailStoreChange flags = {
+    .kind = MAIL_STORE_CHANGE_MESSAGE_FLAGS,
+    .folder_id = folder_remote_id,
+    .message_id = remote_id,
+    .unread = unread,
+    .folder_unread = 0,
+    .folder_total = 0,
+  };
+  emit_change (self, &flags);
+  emit_folder_counts (self, folder_remote_id);
   return TRUE;
 }
 
