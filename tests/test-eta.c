@@ -165,6 +165,80 @@ test_format_buckets (void)
     }
 }
 
+/* Pin the "ETA is not erratic under the IMAP batched-fetch cadence"
+ * property. The sync engine emits one notify::progress per batch, so
+ * the ETA sees samples whose inter-arrival time equals a batch's
+ * wall-clock — observed on Gmail at 1–15 s with significant variance.
+ * Feed the exact alternating slow/fast cadence the user hit, into
+ * two estimators with different windows, and assert:
+ *
+ *   - the wide (120 s) window — the new default — produces an ETA
+ *     whose max/min across the run stays bounded (≤ 2×). The wide
+ *     window averages many batches so single-batch variance is
+ *     diluted into a long-running mean.
+ *   - the narrow (10 s) window — the old default — produces an ETA
+ *     whose max/min exceeds 3×. drop_stale evicts every prior sample
+ *     whenever the inter-arrival exceeds the window, so the rate is
+ *     computed from a single batch's slope and flips between the
+ *     slow-batch rate (~167 ppm) and the fast-batch rate (~667 ppm).
+ *     This is the regression the wide window prevents.
+ *
+ * Removing the window bump in mail-account-page.c trips the wide
+ * assertion (the production caller would default to a narrow ETA).
+ */
+static void
+test_batched_progress_window_smooth (void)
+{
+  /* (t_us, fraction) snapshots at the end of each batch. The
+   * pattern alternates a slow 12 s batch with a fast 3 s batch,
+   * both moving the fraction by the same +0.02 — i.e. the long-run
+   * rate is the same, but individual batches vary 4× in slope. */
+  const gint64 batch_t_us[] = {
+    12 * G_USEC_PER_SEC,
+    15 * G_USEC_PER_SEC,
+    27 * G_USEC_PER_SEC,
+    30 * G_USEC_PER_SEC,
+    42 * G_USEC_PER_SEC,
+    45 * G_USEC_PER_SEC,
+  };
+  const double batch_f[] = { 0.02, 0.04, 0.06, 0.08, 0.10, 0.12 };
+  const int n_batches = G_N_ELEMENTS (batch_t_us);
+
+  MailEta *wide = mail_eta_new (120 * G_USEC_PER_SEC);
+  MailEta *narrow = mail_eta_new (10 * G_USEC_PER_SEC);
+
+  /* Pre-batch baseline sample, as if the fetch phase just started. */
+  mail_eta_record (wide, 0, 0.0);
+  mail_eta_record (narrow, 0, 0.0);
+
+  double wide_min = G_MAXDOUBLE, wide_max = 0.0;
+  double narrow_min = G_MAXDOUBLE, narrow_max = 0.0;
+
+  for (int i = 0; i < n_batches; i++)
+    {
+      mail_eta_record (wide, batch_t_us[i], batch_f[i]);
+      mail_eta_record (narrow, batch_t_us[i], batch_f[i]);
+      double w = mail_eta_seconds_remaining (wide);
+      double n = mail_eta_seconds_remaining (narrow);
+      g_assert_cmpfloat (w, >, 0.0);
+      g_assert_cmpfloat (n, >, 0.0);
+      if (w < wide_min)
+        wide_min = w;
+      if (w > wide_max)
+        wide_max = w;
+      if (n < narrow_min)
+        narrow_min = n;
+      if (n > narrow_max)
+        narrow_max = n;
+    }
+
+  g_assert_cmpfloat (wide_max / wide_min, <=, 2.0);
+  g_assert_cmpfloat (narrow_max / narrow_min, >=, 3.0);
+
+  mail_eta_free (narrow);
+  mail_eta_free (wide);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -176,5 +250,7 @@ main (int argc, char **argv)
   g_test_add_func ("/eta/stalled", test_stalled_returns_negative);
   g_test_add_func ("/eta/complete", test_complete_returns_negative);
   g_test_add_func ("/eta/format-buckets", test_format_buckets);
+  g_test_add_func ("/eta/batched-progress-window-smooth",
+                   test_batched_progress_window_smooth);
   return g_test_run ();
 }

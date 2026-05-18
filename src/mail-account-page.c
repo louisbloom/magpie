@@ -306,10 +306,19 @@ mail_account_page_init (MailAccountPage *self)
   gtk_widget_set_visible (GTK_WIDGET (self->eta_label), FALSE);
   gtk_box_append (GTK_BOX (child), GTK_WIDGET (self->eta_label));
 
-  /* 10-second sliding window — long enough to absorb per-message
-   * jitter, short enough to react within a few seconds of a real
-   * speed change. See mail-eta.h for the algorithm rationale. */
-  self->eta = mail_eta_new (10 * G_USEC_PER_SEC);
+  /* 120-second sliding window. The sync engine emits one
+   * notify::progress per IMAP fetch batch (50 messages), so the ETA
+   * receives one sample per batch wall-time — typically 1–15 s on
+   * Gmail, occasionally more. A 10 s window made drop_stale evict
+   * every prior sample whenever a batch exceeded the window, leaving
+   * the ring with the lone surviving sample plus the new one and
+   * computing the rate from a single batch's slope — fast and slow
+   * batches differ by ~4×, so the ETA flipped between buckets
+   * batch-to-batch. 120 s comfortably exceeds the observed worst-
+   * case batch wall-time, holds 5–60 samples at typical cadence, and
+   * still reacts to genuine speed changes inside the "About N
+   * minutes" formatter's granularity. */
+  self->eta = mail_eta_new (120 * G_USEC_PER_SEC);
 
   /* Two mutually-exclusive action buttons live in the same slot;
    * apply_render_mode toggles their visibility based on sync state.
