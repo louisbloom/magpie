@@ -24,6 +24,8 @@ magpie_SOURCES = \
     mail-imap-retry.h \
     mail-account.c \
     mail-account.h \
+    mail-maildir-watcher.c \
+    mail-maildir-watcher.h \
     mail-store.c \
     mail-store.h \
     mail-backend.h \

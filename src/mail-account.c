@@ -67,6 +67,7 @@ mail_account_new_from_goa (GoaObject *goa_object)
   self->store_backend = mail_backend_store_new (store);
   self->remote_backend = remote;
   self->sync = remote != NULL ? mail_sync_new () : NULL;
+  self->watcher = mail_maildir_watcher_new (store);
   self->identity = identity;
   self->provider_type = provider_type;
   self->provider_name = goa_account_get_provider_name (account);
@@ -96,6 +97,11 @@ mail_account_free (MailAccount *acct)
   if (acct == NULL)
     return;
   g_clear_object (&acct->sync);
+  /* Tear the watcher down before the store: the watcher's reconcile
+   * callbacks reference the store, and any pending debounce timer
+   * may still fire. mail_maildir_watcher_free cancels all of them. */
+  mail_maildir_watcher_free (acct->watcher);
+  acct->watcher = NULL;
   mail_backend_destroy (acct->store_backend);
   mail_backend_destroy (acct->remote_backend);
   if (acct->store != NULL)

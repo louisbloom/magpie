@@ -377,6 +377,24 @@ on_list_folders_done (GObject *source,
       g_object_unref (it);
     }
 
+  /* Now that we know which folders exist, arm the maildir watcher for
+   * each one. watch_folder runs an initial reconcile synchronously, so
+   * any drift between sessions (mutt mark-read while magpie was off)
+   * is corrected in sqlite and FOLDER_COUNTS is emitted; the badges
+   * we just inserted will pick up the corrected counts via the
+   * normal signal handler on the next loop iteration. */
+  if (acct->watcher != NULL)
+    {
+      for (guint i = 0; i < folders->len; i++)
+        {
+          const MailFolder *f = g_ptr_array_index (folders, i);
+          g_autoptr (GError) werr = NULL;
+          if (!mail_maildir_watcher_watch_folder (acct->watcher, f->id, &werr))
+            g_warning ("mail-sidebar: watch_folder %s failed: %s",
+                       f->id, werr != NULL ? werr->message : "(no error)");
+        }
+    }
+
   g_object_unref (self);
   g_free (ctx);
 }

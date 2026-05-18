@@ -18,6 +18,7 @@
 #pragma once
 
 #include "mail-backend.h"
+#include "mail-maildir-watcher.h"
 #include "mail-store.h"
 #include "mail-sync.h"
 
@@ -40,6 +41,7 @@ typedef struct
   MailBackend *store_backend;  /* owned; UI reads through this */
   MailBackend *remote_backend; /* owned; NULL if not supported / test */
   MailSync *sync;              /* owned; NULL when no remote_backend */
+  MailMaildirWatcher *watcher; /* owned; NULL for test accounts */
 
   /* Cached for hot access. For GOA accounts these point into the parent
    * GoaAccount/GoaMail. For test accounts they point into the owned-

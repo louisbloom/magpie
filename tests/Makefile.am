@@ -1,6 +1,6 @@
 # tests/Makefile.am - Unit tests for Magpie.
 
-UNIT_TESTS = test-arena test-accounts test-sidebar test-backend-contract test-message-list test-message-view test-mime test-imap-id test-imap-retry test-store test-backend-store test-sync test-eta test-account-page test-window
+UNIT_TESTS = test-arena test-accounts test-sidebar test-backend-contract test-message-list test-message-view test-mime test-imap-id test-imap-retry test-store test-backend-store test-sync test-eta test-account-page test-window test-maildir-watcher
 
 check_PROGRAMS = $(UNIT_TESTS)
 TESTS          = $(UNIT_TESTS)
@@ -49,6 +49,7 @@ test_sidebar_SOURCES = \
     $(top_srcdir)/src/mail-arena.c \
     $(top_srcdir)/src/mail-backend.c \
     $(top_srcdir)/src/mail-account.c \
+    $(top_srcdir)/src/mail-maildir-watcher.c \
     $(top_srcdir)/src/mail-sidebar.c \
     $(top_srcdir)/src/mail-store.c \
     $(top_srcdir)/src/mail-backend-store.c \
@@ -134,3 +135,11 @@ test_sync_SOURCES = \
     $(top_srcdir)/src/mail-sync.c
 
 test_sync_LDADD = $(LDADD)
+
+test_maildir_watcher_SOURCES = \
+    test-maildir-watcher.c \
+    $(top_srcdir)/src/mail-arena.c \
+    $(top_srcdir)/src/mail-store.c \
+    $(top_srcdir)/src/mail-maildir-watcher.c
+
+test_maildir_watcher_LDADD = $(LDADD)

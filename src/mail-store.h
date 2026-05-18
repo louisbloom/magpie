@@ -100,6 +100,11 @@ gboolean mail_store_delete_folder (MailStore *self,
                                    const char *remote_id,
                                    GError **error);
 
+/* Resolve a folder's on-disk dir_name. Returned g_strdup'd; caller
+ * frees with g_free. Returns NULL when the folder is unknown. */
+char *mail_store_folder_dir_name (MailStore *self,
+                                  const char *folder_remote_id);
+
 /* --- messages ------------------------------------------------- */
 
 /* Insert-or-update a message row keyed by remote_id. Does not touch

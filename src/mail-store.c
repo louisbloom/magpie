@@ -808,6 +808,20 @@ rmtree (const char *path,
   return ok;
 }
 
+char *
+mail_store_folder_dir_name (MailStore *self,
+                            const char *folder_remote_id)
+{
+  g_return_val_if_fail (self != NULL && folder_remote_id != NULL, NULL);
+  sqlite3_stmt *q = self->st_folder_dir_name;
+  sqlite3_reset (q);
+  sqlite3_bind_text (q, 1, folder_remote_id, -1, SQLITE_TRANSIENT);
+  char *dir_name = NULL;
+  if (sqlite3_step (q) == SQLITE_ROW)
+    dir_name = g_strdup ((const char *) sqlite3_column_text (q, 0));
+  return dir_name;
+}
+
 gboolean
 mail_store_delete_folder (MailStore *self,
                           const char *remote_id,
@@ -1217,6 +1231,7 @@ mail_store_reconcile_folder_from_disk (MailStore *self,
   sqlite3_bind_text (q, 1, folder_remote_id, -1, SQLITE_TRANSIENT);
 
   gboolean ok = TRUE;
+  gboolean any_drift = FALSE;
   while ((rc = sqlite3_step (q)) == SQLITE_ROW)
     {
       const char *remote_id = (const char *) sqlite3_column_text (q, 0);
@@ -1239,17 +1254,34 @@ mail_store_reconcile_folder_from_disk (MailStore *self,
       /* Disk and sqlite disagree on the info suffix. Trust disk. */
       const char *info = strstr (disk_filename, ":2,");
       gboolean disk_unread = !(info != NULL && strchr (info + 3, 'S') != NULL);
+      /* Copy the remote_id before the next sqlite3_step invalidates the
+       * sqlite-owned text pointer; the emit below references it. */
+      g_autofree char *remote_id_copy = g_strdup (remote_id);
       sqlite3_stmt *upd = self->st_message_set_unread;
       sqlite3_reset (upd);
       sqlite3_bind_text (upd, 1, disk_filename, -1, SQLITE_TRANSIENT);
       sqlite3_bind_int (upd, 2, disk_unread ? 1 : 0);
-      sqlite3_bind_text (upd, 3, remote_id, -1, SQLITE_TRANSIENT);
+      sqlite3_bind_text (upd, 3, remote_id_copy, -1, SQLITE_TRANSIENT);
       if (sqlite3_step (upd) != SQLITE_DONE)
         {
           set_sqlite_error (error, self->db, "reconcile update");
           ok = FALSE;
           break;
         }
+      any_drift = TRUE;
+      /* Per-row MESSAGE_FLAGS emit so the message-list rebinds the
+       * affected row when the user happens to be viewing this folder.
+       * folder_remote_id is the caller-supplied stable string; it
+       * outlives the emit. */
+      MailStoreChange flags = {
+        .kind = MAIL_STORE_CHANGE_MESSAGE_FLAGS,
+        .folder_id = folder_remote_id,
+        .message_id = remote_id_copy,
+        .unread = disk_unread,
+        .folder_unread = 0,
+        .folder_total = 0,
+      };
+      emit_change (self, &flags);
     }
   if (ok && rc != SQLITE_DONE)
     {
@@ -1257,6 +1289,12 @@ mail_store_reconcile_folder_from_disk (MailStore *self,
       ok = FALSE;
     }
   sqlite3_finalize (q);
+  /* One aggregate FOLDER_COUNTS at the end keeps the sidebar refresh
+   * cost O(1) per reconcile pass even when many rows drifted (mutt
+   * marking 30 messages at once). Skipped if nothing changed so a
+   * watcher event triggered by our own write doesn't ping subscribers. */
+  if (ok && any_drift)
+    emit_folder_counts (self, folder_remote_id);
   return ok;
 }
 
