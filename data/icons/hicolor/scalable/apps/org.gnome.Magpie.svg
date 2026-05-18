@@ -1,0 +1,127 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <title>Magpie</title>
+  <defs>
+    <clipPath id="platter">
+      <rect width="128" height="128" rx="22" ry="22"/>
+    </clipPath>
+  </defs>
+
+  <!-- Soft cream backdrop, echoing the snow-on-rock photo background. -->
+  <rect width="128" height="128" rx="22" ry="22" fill="#ecdcc3"/>
+
+  <g clip-path="url(#platter)" stroke-linejoin="round" stroke-linecap="round">
+
+    <!-- ============================================================ -->
+    <!-- FAR WING (background, sweeping up and to the left)            -->
+    <!-- ============================================================ -->
+    <g stroke="#1c1c20" stroke-width="1.4">
+      <!-- Wing membrane: iridescent blue -->
+      <path fill="#2b7aa0" d="
+        M 60 52
+        C 50 40, 38 30, 24 28
+        C 18 30, 16 36, 20 42
+        C 32 46, 46 50, 60 54 Z"/>
+      <!-- Teal-green wash near base -->
+      <path fill="#2d8a72" stroke="none" opacity="0.85" d="
+        M 58 50
+        C 50 42, 42 38, 36 36
+        C 44 44, 52 48, 60 52 Z"/>
+      <!-- White primary tips -->
+      <g stroke="#f7f1e2" stroke-width="2.6" fill="none">
+        <path d="M 30 27 L 22 23"/>
+        <path d="M 36 30 L 30 23"/>
+        <path d="M 42 33 L 38 26"/>
+        <path d="M 48 36 L 46 30"/>
+      </g>
+      <!-- Feather sketch lines -->
+      <g stroke="#1c1c20" stroke-width="0.7" fill="none" opacity="0.55">
+        <path d="M 34 32 Q 44 38 56 46"/>
+        <path d="M 40 30 Q 48 36 58 44"/>
+      </g>
+    </g>
+
+    <!-- ============================================================ -->
+    <!-- TAIL (long, pointed, black with green iridescent sheen)       -->
+    <!-- ============================================================ -->
+    <g stroke="#1c1c20" stroke-width="1.4">
+      <path fill="#1c1c20" d="
+        M 58 70
+        C 44 80, 28 94, 14 110
+        C 24 102, 32 100, 40 96
+        C 50 90, 58 82, 62 74 Z"/>
+      <!-- Iridescent green -->
+      <path fill="#2d8a72" stroke="none" opacity="0.55" d="
+        M 54 76
+        C 42 86, 30 96, 20 106
+        C 30 98, 40 92, 50 86
+        C 54 84, 56 80, 54 76 Z"/>
+      <!-- Tail-feather sketch lines -->
+      <g stroke="#f7f1e2" stroke-width="0.7" fill="none" opacity="0.35">
+        <path d="M 30 92 L 38 88"/>
+        <path d="M 24 98 L 32 94"/>
+      </g>
+    </g>
+
+    <!-- ============================================================ -->
+    <!-- BODY (black teardrop, head right, rump left)                  -->
+    <!-- ============================================================ -->
+    <g stroke="#1c1c20" stroke-width="1.4">
+      <path fill="#1c1c20" d="
+        M 56 50
+        C 56 42, 64 38, 74 38
+        C 86 38, 94 46, 96 56
+        C 96 66, 88 74, 76 74
+        C 66 74, 58 70, 56 62
+        C 54 56, 54 52, 56 50 Z"/>
+      <!-- White belly -->
+      <path fill="#f7f1e2" stroke="none" d="
+        M 60 64
+        C 66 70, 76 72, 88 68
+        C 88 72, 82 74, 74 74
+        C 66 74, 60 70, 60 64 Z"/>
+    </g>
+
+    <!-- ============================================================ -->
+    <!-- HEAD                                                          -->
+    <!-- ============================================================ -->
+    <g stroke="#1c1c20" stroke-width="1.4">
+      <ellipse fill="#1c1c20" cx="94" cy="46" rx="10" ry="9"/>
+      <!-- Beak -->
+      <path fill="#1c1c20" d="M 102 46 L 112 44 L 112 49 L 102 50 Z"/>
+      <!-- Eye -->
+      <circle fill="#f7f1e2" stroke="none" cx="96" cy="44" r="1.7"/>
+      <circle fill="#1c1c20" stroke="none" cx="96.4" cy="44.2" r="0.7"/>
+    </g>
+
+    <!-- ============================================================ -->
+    <!-- NEAR WING (foreground, sweeping down and to the right)        -->
+    <!-- ============================================================ -->
+    <g stroke="#1c1c20" stroke-width="1.4">
+      <!-- Wing membrane: iridescent blue -->
+      <path fill="#2b7aa0" d="
+        M 72 58
+        C 82 66, 94 78, 108 86
+        C 114 84, 116 78, 112 72
+        C 100 66, 86 60, 72 56 Z"/>
+      <!-- Teal-green wash near base -->
+      <path fill="#2d8a72" stroke="none" opacity="0.85" d="
+        M 72 58
+        C 80 64, 88 70, 98 74
+        C 90 66, 80 62, 72 56 Z"/>
+      <!-- White primary tips -->
+      <g stroke="#f7f1e2" stroke-width="2.6" fill="none">
+        <path d="M 98 84 L 106 88"/>
+        <path d="M 94 80 L 102 86"/>
+        <path d="M 90 76 L 98 82"/>
+        <path d="M 86 72 L 94 78"/>
+      </g>
+      <!-- Feather sketch lines -->
+      <g stroke="#1c1c20" stroke-width="0.7" fill="none" opacity="0.55">
+        <path d="M 80 64 Q 90 70 100 76"/>
+        <path d="M 82 60 Q 92 66 102 72"/>
+      </g>
+    </g>
+
+  </g>
+</svg>
