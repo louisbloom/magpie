@@ -449,6 +449,106 @@ test_link_raw_creates_hardlink (Fixture *f,
   g_assert_cmpint (sa.st_nlink, ==, 2);       /* link count bumped */
 }
 
+/* Regression: when an external client (mutt, another magpie instance)
+ * renames a file in cur/ to add or remove the S flag, the next sync
+ * pass must pick that up and update sqlite to match — per the
+ * Maildir-is-truth rule. The reconciler matches sqlite rows to disk
+ * files by their unique prefix (everything before ":2,"), so a rename
+ * that only changes the info suffix is identified as the same logical
+ * message. */
+static void
+test_reconcile_folder_from_disk (Fixture *f,
+                                 gconstpointer data)
+{
+  g_autoptr (GError) error = NULL;
+  g_assert_true (mail_store_upsert_folder (f->store, "rid-INBOX", "INBOX", NULL, 0, 0,
+                                           NULL, &error));
+
+  /* Write an unread file (no info suffix in our convention) and
+   * upsert a matching row that agrees: unread=TRUE, filename=basename. */
+  const char *payload = "Subject: hi\r\n\r\nbody\r\n";
+  g_autoptr (GBytes) in = g_bytes_new_static (payload, strlen (payload));
+  g_autofree char *name = NULL;
+  g_assert_true (mail_store_write_raw (f->store, "INBOX", in, FALSE, &name, &error));
+  g_assert_false (g_str_has_suffix (name, ":2,S"));
+  g_assert_true (mail_store_upsert_message (f->store, "rid-INBOX", "msg-1", NULL, name,
+                                            "hi", "a@x", 1700000000, TRUE, NULL, &error));
+  g_assert_no_error (error);
+
+  /* Pretend mutt opened the message and marked it read: rename the
+   * on-disk file to add :2,S, then run the reconciler. Sqlite must
+   * reflect both the new filename and unread=FALSE. */
+  g_autofree char *seen_name = g_strconcat (name, ":2,S", NULL);
+  g_autofree char *old_path = g_build_filename (f->root, "INBOX", "cur", name, NULL);
+  g_autofree char *new_path = g_build_filename (f->root, "INBOX", "cur", seen_name, NULL);
+  g_assert_cmpint (g_rename (old_path, new_path), ==, 0);
+
+  g_assert_true (mail_store_reconcile_folder_from_disk (f->store, "rid-INBOX", &error));
+  g_assert_no_error (error);
+
+  GPtrArray *msgs = mail_store_list_messages (f->store, "rid-INBOX", 10, &f->arena, &error);
+  g_assert_no_error (error);
+  g_assert_cmpuint (msgs->len, ==, 1);
+  MailMessageMeta *m = g_ptr_array_index (msgs, 0);
+  g_assert_false (m->unread);
+  g_ptr_array_unref (msgs);
+
+  /* Body is still readable through the store via the now-tracked filename. */
+  const char *dir = NULL, *file = NULL;
+  g_assert_true (mail_store_message_location (f->store, "msg-1", &f->arena, &dir, &file, &error));
+  g_assert_no_error (error);
+  g_assert_cmpstr (file, ==, seen_name);
+  g_autoptr (GBytes) body = mail_store_read_raw (f->store, dir, file, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (body);
+
+  /* Now flip the other way: rename to drop :2,S, reconcile, and
+   * watch sqlite flip back to unread. */
+  g_assert_cmpint (g_rename (new_path, old_path), ==, 0);
+  g_assert_true (mail_store_reconcile_folder_from_disk (f->store, "rid-INBOX", &error));
+  g_assert_no_error (error);
+  mail_arena_reset (&f->arena);
+  msgs = mail_store_list_messages (f->store, "rid-INBOX", 10, &f->arena, &error);
+  g_assert_no_error (error);
+  g_assert_cmpuint (msgs->len, ==, 1);
+  m = g_ptr_array_index (msgs, 0);
+  g_assert_true (m->unread);
+  g_ptr_array_unref (msgs);
+
+  /* Reconciling a folder with no on-disk drift is a no-op success. */
+  g_assert_true (mail_store_reconcile_folder_from_disk (f->store, "rid-INBOX", &error));
+  g_assert_no_error (error);
+
+  /* Reconciling an unknown folder is a no-op success. */
+  g_assert_true (mail_store_reconcile_folder_from_disk (f->store, "nope", &error));
+  g_assert_no_error (error);
+}
+
+static void
+test_maildir_basename_unique_prefix (void)
+{
+  struct
+  {
+    const char *in;
+    const char *expect;
+  } cases[] = {
+    { "1700.M1P2Q1.host", "1700.M1P2Q1.host" },     /* no marker */
+    { "1700.M1P2Q1.host:2,", "1700.M1P2Q1.host" },  /* empty info */
+    { "1700.M1P2Q1.host:2,S", "1700.M1P2Q1.host" }, /* with seen */
+    { "1700.M1P2Q1.host:2,FRST", "1700.M1P2Q1.host" },
+    /* Pathological: ":2," inside the unique portion would only
+     * happen if a previous client wrote it that way; the spec says
+     * the unique prefix can be anything but ":/". We split on the
+     * first occurrence and live with that. */
+    { ":2,first", "" },
+  };
+  for (gsize i = 0; i < G_N_ELEMENTS (cases); i++)
+    {
+      g_autofree char *got = _mail_store_maildir_basename_unique_prefix_for_test (cases[i].in);
+      g_assert_cmpstr (got, ==, cases[i].expect);
+    }
+}
+
 static void
 test_maildir_basename_add_flag (void)
 {
@@ -721,9 +821,11 @@ main (int argc,
   ADD ("schema-migration-v1-to-v2", test_schema_migration_v1_to_v2);
   ADD ("application-id-stamped", test_application_id_is_magpie);
   ADD ("set-message-unread-renames", test_set_message_unread_renames_and_updates);
+  ADD ("reconcile-folder-from-disk", test_reconcile_folder_from_disk);
 
   g_test_add_func ("/mail-store/maildir-basename-add-flag", test_maildir_basename_add_flag);
   g_test_add_func ("/mail-store/maildir-basename-remove-flag", test_maildir_basename_remove_flag);
+  g_test_add_func ("/mail-store/maildir-basename-unique-prefix", test_maildir_basename_unique_prefix);
 
 #undef ADD
 

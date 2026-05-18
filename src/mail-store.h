@@ -137,6 +137,18 @@ gboolean mail_store_set_message_unread (MailStore *self,
                                         gboolean unread,
                                         GError **error);
 
+/* Sync sqlite to disk truth for a single folder's `cur/` directory.
+ * For every message row in @folder_remote_id, check whether the file
+ * on disk still matches messages.filename. When the on-disk basename
+ * has the same Maildir unique-prefix but a different info suffix
+ * (e.g. mutt added `S` to mark it read), update messages.filename and
+ * messages.unread to match disk. Files with no matching sqlite row
+ * are left alone; rows whose file is missing are logged but not
+ * dropped. */
+gboolean mail_store_reconcile_folder_from_disk (MailStore *self,
+                                                const char *folder_remote_id,
+                                                GError **error);
+
 /* --- raw RFC822 file IO -------------------------------------- */
 
 /* Write @bytes to <root>/<dir_name>/tmp/<name>, fsync, rename into
@@ -163,6 +175,13 @@ char *_mail_store_maildir_basename_add_flag_for_test (const char *basename,
                                                       char flag);
 char *_mail_store_maildir_basename_remove_flag_for_test (const char *basename,
                                                          char flag);
+
+/* Test-only: returns the "unique" Maildir prefix — everything in
+ * @basename up to but not including ":2,". The unique prefix is
+ * stable across flag mutations and is what the disk reconciler uses
+ * to match a sqlite row to a file in cur/. Returned string is
+ * g_malloc'd. */
+char *_mail_store_maildir_basename_unique_prefix_for_test (const char *basename);
 
 /* Hardlink an existing body file into another folder. Used by the
  * sync engine when dedupping cross-folder duplicates: one fetch,

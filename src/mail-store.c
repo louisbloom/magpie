@@ -926,6 +926,7 @@ mail_store_delete_message (MailStore *self,
 
 static char *maildir_basename_add_flag (const char *basename, char flag);
 static char *maildir_basename_remove_flag (const char *basename, char flag);
+static char *maildir_basename_unique_prefix (const char *basename);
 
 gboolean
 mail_store_set_message_unread (MailStore *self,
@@ -995,6 +996,117 @@ mail_store_set_message_unread (MailStore *self,
       return FALSE;
     }
   return TRUE;
+}
+
+gboolean
+mail_store_reconcile_folder_from_disk (MailStore *self,
+                                       const char *folder_remote_id,
+                                       GError **error)
+{
+  g_return_val_if_fail (self != NULL && folder_remote_id != NULL, FALSE);
+
+  /* Resolve the folder's dir_name. Reuse the existing per-folder
+   * dir lookup the upsert path also uses. */
+  sqlite3_stmt *qdir = self->st_folder_dir_name;
+  sqlite3_reset (qdir);
+  sqlite3_bind_text (qdir, 1, folder_remote_id, -1, SQLITE_TRANSIENT);
+  g_autofree char *dir_name = NULL;
+  int rc = sqlite3_step (qdir);
+  if (rc == SQLITE_ROW)
+    dir_name = g_strdup ((const char *) sqlite3_column_text (qdir, 0));
+  else if (rc != SQLITE_DONE)
+    {
+      set_sqlite_error (error, self->db, "folder dir_name for reconcile");
+      return FALSE;
+    }
+  if (dir_name == NULL)
+    return TRUE; /* unknown folder; nothing to reconcile */
+
+  /* Build unique-prefix -> on-disk basename map by scanning cur/. */
+  g_autofree char *cur_path = g_build_filename (self->root, dir_name, "cur", NULL);
+  g_autoptr (GError) dir_err = NULL;
+  g_autoptr (GDir) dir = g_dir_open (cur_path, 0, &dir_err);
+  if (dir == NULL)
+    {
+      /* The folder dir might not exist yet on a freshly upserted
+       * folder; treat that as "nothing to reconcile". */
+      if (g_error_matches (dir_err, G_FILE_ERROR, G_FILE_ERROR_NOENT))
+        return TRUE;
+      g_propagate_error (error, g_steal_pointer (&dir_err));
+      return FALSE;
+    }
+  g_autoptr (GHashTable) disk = g_hash_table_new_full (g_str_hash, g_str_equal,
+                                                       g_free, g_free);
+  const char *leaf;
+  while ((leaf = g_dir_read_name (dir)) != NULL)
+    {
+      char *prefix = maildir_basename_unique_prefix (leaf);
+      /* In the unlikely case two entries share a unique-prefix, keep
+       * the first — we can't pick a winner, and either choice trips
+       * the same reconcile path when sqlite next disagrees. */
+      if (!g_hash_table_contains (disk, prefix))
+        g_hash_table_insert (disk, prefix, g_strdup (leaf));
+      else
+        g_free (prefix);
+    }
+
+  /* Walk sqlite rows for this folder, updating any whose on-disk
+   * basename has drifted. The query is small — one row per message in
+   * the folder — and the loop body's UPDATE is the only mutation. */
+  sqlite3_stmt *q = NULL;
+  const char *sql = "SELECT m.remote_id, m.filename"
+                    " FROM messages m"
+                    " JOIN folders f ON f.stable_id = m.folder_stable_id"
+                    " WHERE f.remote_id = ?;";
+  if (sqlite3_prepare_v2 (self->db, sql, -1, &q, NULL) != SQLITE_OK)
+    {
+      set_sqlite_error (error, self->db, "prepare reconcile select");
+      return FALSE;
+    }
+  sqlite3_bind_text (q, 1, folder_remote_id, -1, SQLITE_TRANSIENT);
+
+  gboolean ok = TRUE;
+  while ((rc = sqlite3_step (q)) == SQLITE_ROW)
+    {
+      const char *remote_id = (const char *) sqlite3_column_text (q, 0);
+      const char *db_filename = (const char *) sqlite3_column_text (q, 1);
+
+      g_autofree char *prefix = maildir_basename_unique_prefix (db_filename);
+      const char *disk_filename = g_hash_table_lookup (disk, prefix);
+      if (disk_filename == NULL)
+        {
+          /* File missing from disk. Don't drop the row — that's a
+           * separate policy decision (might be mid-sync, might be a
+           * mutt-side delete). Log and move on. */
+          g_warning ("mail-store: message %s missing from %s (sqlite says %s)",
+                     remote_id, cur_path, db_filename);
+          continue;
+        }
+      if (g_strcmp0 (disk_filename, db_filename) == 0)
+        continue;
+
+      /* Disk and sqlite disagree on the info suffix. Trust disk. */
+      const char *info = strstr (disk_filename, ":2,");
+      gboolean disk_unread = !(info != NULL && strchr (info + 3, 'S') != NULL);
+      sqlite3_stmt *upd = self->st_message_set_unread;
+      sqlite3_reset (upd);
+      sqlite3_bind_text (upd, 1, disk_filename, -1, SQLITE_TRANSIENT);
+      sqlite3_bind_int (upd, 2, disk_unread ? 1 : 0);
+      sqlite3_bind_text (upd, 3, remote_id, -1, SQLITE_TRANSIENT);
+      if (sqlite3_step (upd) != SQLITE_DONE)
+        {
+          set_sqlite_error (error, self->db, "reconcile update");
+          ok = FALSE;
+          break;
+        }
+    }
+  if (ok && rc != SQLITE_DONE)
+    {
+      set_sqlite_error (error, self->db, "reconcile select");
+      ok = FALSE;
+    }
+  sqlite3_finalize (q);
+  return ok;
 }
 
 /* --- raw IO ------------------------------------------------------- */
@@ -1075,6 +1187,27 @@ maildir_basename_remove_flag (const char *basename,
 
   gsize prefix_len = (gsize) (marker - basename);
   return g_strdup_printf ("%.*s:2,%s", (int) prefix_len, basename, new_flags);
+}
+
+/* Stable identifier for a Maildir entry: the portion of the basename
+ * before ":2,". Per the spec, only the info suffix changes when flags
+ * are added or removed, so two basenames with the same unique prefix
+ * refer to the same logical message regardless of which client last
+ * wrote it. */
+static char *
+maildir_basename_unique_prefix (const char *basename)
+{
+  g_return_val_if_fail (basename != NULL, NULL);
+  const char *marker = strstr (basename, ":2,");
+  if (marker == NULL)
+    return g_strdup (basename);
+  return g_strndup (basename, (gsize) (marker - basename));
+}
+
+char *
+_mail_store_maildir_basename_unique_prefix_for_test (const char *basename)
+{
+  return maildir_basename_unique_prefix (basename);
 }
 
 char *
