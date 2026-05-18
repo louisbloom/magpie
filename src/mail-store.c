@@ -49,6 +49,7 @@ struct _MailStore
   sqlite3_stmt *st_message_location;
   sqlite3_stmt *st_message_location_by_content_key;
   sqlite3_stmt *st_message_delete;
+  sqlite3_stmt *st_message_set_unread;
 
   /* Scratch buffer used by upsert_folder to hand back a borrowed
    * pointer to the chosen dir_name (valid until the next upsert). */
@@ -390,6 +391,8 @@ prepare_statements (MailStore *self,
       "SELECT f.dir_name, m.filename FROM messages m"
       " JOIN folders f ON f.stable_id = m.folder_stable_id"
       " WHERE m.remote_id = ?;" },
+    { &self->st_message_set_unread,
+      "UPDATE messages SET filename = ?, unread = ? WHERE remote_id = ?;" },
   };
   for (gsize i = 0; i < G_N_ELEMENTS (table); i++)
     {
@@ -466,6 +469,7 @@ mail_store_close (MailStore *self)
     &self->st_message_location,
     &self->st_message_location_by_content_key,
     &self->st_message_delete,
+    &self->st_message_set_unread,
   };
   for (gsize i = 0; i < G_N_ELEMENTS (all); i++)
     if (*all[i] != NULL)
@@ -920,7 +924,172 @@ mail_store_delete_message (MailStore *self,
   return ok;
 }
 
+static char *maildir_basename_add_flag (const char *basename, char flag);
+static char *maildir_basename_remove_flag (const char *basename, char flag);
+
+gboolean
+mail_store_set_message_unread (MailStore *self,
+                               const char *remote_id,
+                               gboolean unread,
+                               GError **error)
+{
+  g_return_val_if_fail (self != NULL && remote_id != NULL, FALSE);
+
+  /* Locate the on-disk file via the existing message-location join.
+   * Inline the statement use (rather than calling the public API)
+   * because the public version requires a MailArena and we just need
+   * private copies for the rename + UPDATE. */
+  sqlite3_stmt *loc = self->st_message_location;
+  sqlite3_reset (loc);
+  sqlite3_bind_text (loc, 1, remote_id, -1, SQLITE_TRANSIENT);
+  g_autofree char *dir_name = NULL;
+  g_autofree char *filename = NULL;
+  int rc = sqlite3_step (loc);
+  if (rc == SQLITE_ROW)
+    {
+      dir_name = g_strdup ((const char *) sqlite3_column_text (loc, 0));
+      filename = g_strdup ((const char *) sqlite3_column_text (loc, 1));
+    }
+  else if (rc != SQLITE_DONE)
+    {
+      set_sqlite_error (error, self->db, "message location for set-unread");
+      return FALSE;
+    }
+  /* Unknown message id is not an error: the local index may not have
+   * caught up yet (e.g. the row was opened in a race with sync). The
+   * caller still got TRUE so its UI bookkeeping completes. */
+  if (dir_name == NULL || filename == NULL)
+    return TRUE;
+
+  g_autofree char *new_filename = unread
+                                      ? maildir_basename_remove_flag (filename, 'S')
+                                      : maildir_basename_add_flag (filename, 'S');
+  if (g_strcmp0 (filename, new_filename) == 0)
+    return TRUE; /* on-disk basename and sqlite already reflect the desired state */
+
+  g_autofree char *old_path = g_build_filename (self->root, dir_name, "cur", filename, NULL);
+  g_autofree char *new_path = g_build_filename (self->root, dir_name, "cur", new_filename, NULL);
+
+  /* Atomic same-filesystem rename. If this fails (typically ENOENT
+   * from a parallel mutator that already renamed the file) we leave
+   * sqlite alone so the reconciler can catch up to disk truth. */
+  if (g_rename (old_path, new_path) != 0)
+    {
+      g_set_error (error, G_IO_ERROR, g_io_error_from_errno (errno),
+                   "rename %s -> %s: %s",
+                   old_path, new_path, g_strerror (errno));
+      return FALSE;
+    }
+
+  sqlite3_stmt *st = self->st_message_set_unread;
+  sqlite3_reset (st);
+  sqlite3_bind_text (st, 1, new_filename, -1, SQLITE_TRANSIENT);
+  sqlite3_bind_int (st, 2, unread ? 1 : 0);
+  sqlite3_bind_text (st, 3, remote_id, -1, SQLITE_TRANSIENT);
+  if (sqlite3_step (st) != SQLITE_DONE)
+    {
+      /* Disk renamed, sqlite didn't catch up. Surface the error so
+       * the caller can log; the next reconciler pass restores
+       * agreement (disk is the source of truth). */
+      set_sqlite_error (error, self->db, "message set unread");
+      return FALSE;
+    }
+  return TRUE;
+}
+
 /* --- raw IO ------------------------------------------------------- */
+
+/* Maildir info-suffix flag manipulation. Per the spec, a "cur" file
+ * is named <unique>[:2,FLAGS] where FLAGS are ASCII letters in
+ * alphabetical order: D F P R S T (draft, flagged, passed, replied,
+ * seen, trashed). We treat three input shapes:
+ *   1. no ":2," marker         -> append ":2,<flag>"
+ *   2. ":2," with empty info   -> append the flag
+ *   3. ":2,<flags>"            -> insert the flag at its sort position
+ * If the flag is already set, returns a duplicate of @basename.
+ *
+ * Returned string is g_malloc'd; caller frees. */
+static char *
+maildir_basename_add_flag (const char *basename,
+                           char flag)
+{
+  g_return_val_if_fail (basename != NULL, NULL);
+  g_return_val_if_fail (g_ascii_isalpha (flag), NULL);
+
+  const char *marker = strstr (basename, ":2,");
+  if (marker == NULL)
+    return g_strdup_printf ("%s:2,%c", basename, flag);
+
+  const char *flags = marker + 3; /* points at first flag char, or '\0' */
+  if (strchr (flags, flag) != NULL)
+    return g_strdup (basename); /* already set */
+
+  /* Build a new flags string with @flag inserted in alphabetical order. */
+  gsize n_flags = strlen (flags);
+  g_autofree char *new_flags = g_malloc0 (n_flags + 2);
+  gsize i = 0, j = 0;
+  gboolean placed = FALSE;
+  while (i < n_flags)
+    {
+      if (!placed && flags[i] > flag)
+        {
+          new_flags[j++] = flag;
+          placed = TRUE;
+        }
+      new_flags[j++] = flags[i++];
+    }
+  if (!placed)
+    new_flags[j++] = flag;
+  new_flags[j] = '\0';
+
+  gsize prefix_len = (gsize) (marker - basename); /* up to and excluding ":2," */
+  return g_strdup_printf ("%.*s:2,%s", (int) prefix_len, basename, new_flags);
+}
+
+/* Inverse: returns a basename with @flag removed. No-op (returns a
+ * duplicate) if @flag is not present or there is no ":2," marker.
+ * Preserves the empty ":2," marker when removing the last flag, so the
+ * file remains a well-formed Maildir cur/ entry. */
+static char *
+maildir_basename_remove_flag (const char *basename,
+                              char flag)
+{
+  g_return_val_if_fail (basename != NULL, NULL);
+  g_return_val_if_fail (g_ascii_isalpha (flag), NULL);
+
+  const char *marker = strstr (basename, ":2,");
+  if (marker == NULL)
+    return g_strdup (basename);
+
+  const char *flags = marker + 3;
+  if (strchr (flags, flag) == NULL)
+    return g_strdup (basename);
+
+  gsize n_flags = strlen (flags);
+  g_autofree char *new_flags = g_malloc0 (n_flags + 1);
+  gsize j = 0;
+  for (gsize i = 0; i < n_flags; i++)
+    if (flags[i] != flag)
+      new_flags[j++] = flags[i];
+  new_flags[j] = '\0';
+
+  gsize prefix_len = (gsize) (marker - basename);
+  return g_strdup_printf ("%.*s:2,%s", (int) prefix_len, basename, new_flags);
+}
+
+char *
+_mail_store_maildir_basename_add_flag_for_test (const char *basename,
+                                                char flag)
+{
+  return maildir_basename_add_flag (basename, flag);
+}
+
+char *
+_mail_store_maildir_basename_remove_flag_for_test (const char *basename,
+                                                   char flag)
+{
+  return maildir_basename_remove_flag (basename, flag);
+}
 
 static char *
 maildir_filename (MailStore *self,

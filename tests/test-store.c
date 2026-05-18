@@ -450,6 +450,150 @@ test_link_raw_creates_hardlink (Fixture *f,
 }
 
 static void
+test_maildir_basename_add_flag (void)
+{
+  struct
+  {
+    const char *in;
+    char flag;
+    const char *expect;
+  } cases[] = {
+    /* No ":2," marker → append. */
+    { "1700.M1P2Q1.host", 'S', "1700.M1P2Q1.host:2,S" },
+    /* Empty info → append. */
+    { "1700.M1P2Q1.host:2,", 'S', "1700.M1P2Q1.host:2,S" },
+    /* Insert in alphabetical position. */
+    { "1700.M1P2Q1.host:2,F", 'S', "1700.M1P2Q1.host:2,FS" },
+    { "1700.M1P2Q1.host:2,T", 'S', "1700.M1P2Q1.host:2,ST" },
+    { "1700.M1P2Q1.host:2,FRT", 'S', "1700.M1P2Q1.host:2,FRST" },
+    { "1700.M1P2Q1.host:2,DT", 'F', "1700.M1P2Q1.host:2,DFT" },
+    /* Already set → unchanged. */
+    { "1700.M1P2Q1.host:2,S", 'S', "1700.M1P2Q1.host:2,S" },
+    { "1700.M1P2Q1.host:2,FRS", 'S', "1700.M1P2Q1.host:2,FRS" },
+  };
+  for (gsize i = 0; i < G_N_ELEMENTS (cases); i++)
+    {
+      g_autofree char *got = _mail_store_maildir_basename_add_flag_for_test (cases[i].in, cases[i].flag);
+      g_assert_cmpstr (got, ==, cases[i].expect);
+    }
+}
+
+static void
+test_maildir_basename_remove_flag (void)
+{
+  struct
+  {
+    const char *in;
+    char flag;
+    const char *expect;
+  } cases[] = {
+    /* Remove from middle / end. */
+    { "1700.M1P2Q1.host:2,FS", 'S', "1700.M1P2Q1.host:2,F" },
+    { "1700.M1P2Q1.host:2,FRST", 'S', "1700.M1P2Q1.host:2,FRT" },
+    /* Removing the last flag leaves the ":2," marker — still
+     * spec-compliant for a cur/ entry. */
+    {
+        "1700.M1P2Q1.host:2,S",
+        'S',
+        "1700.M1P2Q1.host:2,",
+    },
+    /* Flag absent → unchanged. */
+    { "1700.M1P2Q1.host:2,F", 'S', "1700.M1P2Q1.host:2,F" },
+    /* No marker → unchanged. */
+    { "1700.M1P2Q1.host", 'S', "1700.M1P2Q1.host" },
+  };
+  for (gsize i = 0; i < G_N_ELEMENTS (cases); i++)
+    {
+      g_autofree char *got = _mail_store_maildir_basename_remove_flag_for_test (cases[i].in, cases[i].flag);
+      g_assert_cmpstr (got, ==, cases[i].expect);
+    }
+}
+
+/* End-to-end: writing an unread message, then calling
+ * mail_store_set_message_unread (false) must rename the file in cur/
+ * to add :2,S, update sqlite to track, and keep the body readable
+ * under its new name. Mutt and other Maildir readers will see the
+ * file under the new name and read the S flag directly. */
+static void
+test_set_message_unread_renames_and_updates (Fixture *f,
+                                             gconstpointer data)
+{
+  g_autoptr (GError) error = NULL;
+  g_assert_true (mail_store_upsert_folder (f->store, "rid-INBOX", "INBOX", NULL, 0, 0,
+                                           NULL, &error));
+  g_assert_no_error (error);
+
+  const char *payload = "From: a@example.com\r\nSubject: hi\r\n\r\nbody\r\n";
+  g_autoptr (GBytes) in = g_bytes_new_static (payload, strlen (payload));
+  g_autofree char *write_name = NULL;
+  g_assert_true (mail_store_write_raw (f->store, "INBOX", in, FALSE, &write_name, &error));
+  g_assert_no_error (error);
+  /* seen=FALSE → bare basename, no :2,S. */
+  g_assert_false (g_str_has_suffix (write_name, ":2,S"));
+
+  g_assert_true (mail_store_upsert_message (f->store, "rid-INBOX", "msg-1", NULL, write_name,
+                                            "hi", "a@example.com", 1700000000, TRUE,
+                                            NULL, &error));
+  g_assert_no_error (error);
+
+  g_autofree char *old_path = g_build_filename (f->root, "INBOX", "cur", write_name, NULL);
+  g_assert_true (g_file_test (old_path, G_FILE_TEST_EXISTS));
+
+  /* Mark read. */
+  g_assert_true (mail_store_set_message_unread (f->store, "msg-1", FALSE, &error));
+  g_assert_no_error (error);
+
+  /* Old basename is gone from cur/. */
+  g_assert_false (g_file_test (old_path, G_FILE_TEST_EXISTS));
+
+  /* sqlite reflects the new state. */
+  GPtrArray *msgs = mail_store_list_messages (f->store, "rid-INBOX", 10, &f->arena, &error);
+  g_assert_no_error (error);
+  g_assert_cmpuint (msgs->len, ==, 1);
+  MailMessageMeta *m = g_ptr_array_index (msgs, 0);
+  g_assert_false (m->unread);
+  g_ptr_array_unref (msgs);
+
+  /* The new on-disk name ends in :2,S and is reachable via the store's
+   * location lookup. */
+  const char *dir = NULL, *file = NULL;
+  g_assert_true (mail_store_message_location (f->store, "msg-1", &f->arena, &dir, &file, &error));
+  g_assert_no_error (error);
+  g_assert_cmpstr (dir, ==, "INBOX");
+  g_assert_true (g_str_has_suffix (file, ":2,S"));
+  g_autofree char *new_path = g_build_filename (f->root, "INBOX", "cur", file, NULL);
+  g_assert_true (g_file_test (new_path, G_FILE_TEST_EXISTS));
+
+  /* Body is still readable under the new filename. */
+  g_autoptr (GBytes) out = mail_store_read_raw (f->store, "INBOX", file, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (out);
+  gsize len = 0;
+  const char *bytes = g_bytes_get_data (out, &len);
+  g_assert_cmpuint (len, ==, strlen (payload));
+  g_assert_cmpint (memcmp (bytes, payload, len), ==, 0);
+
+  /* Mark unread again — file renamed back (no :2,S), sqlite flipped,
+   * body still readable under the latest name. */
+  g_assert_true (mail_store_set_message_unread (f->store, "msg-1", TRUE, &error));
+  g_assert_no_error (error);
+  mail_arena_reset (&f->arena);
+  const char *dir2 = NULL, *file2 = NULL;
+  g_assert_true (mail_store_message_location (f->store, "msg-1", &f->arena, &dir2, &file2, &error));
+  g_assert_no_error (error);
+  g_assert_false (g_str_has_suffix (file2, ",S"));
+  g_autofree char *path2 = g_build_filename (f->root, "INBOX", "cur", file2, NULL);
+  g_assert_true (g_file_test (path2, G_FILE_TEST_EXISTS));
+  g_autoptr (GBytes) out2 = mail_store_read_raw (f->store, "INBOX", file2, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (out2);
+
+  /* Unknown remote_id is a no-op success; nothing on disk changes. */
+  g_assert_true (mail_store_set_message_unread (f->store, "nope", FALSE, &error));
+  g_assert_no_error (error);
+}
+
+static void
 test_application_id_is_magpie (Fixture *f,
                                gconstpointer data)
 {
@@ -576,6 +720,10 @@ main (int argc,
   ADD ("link-raw-creates-hardlink", test_link_raw_creates_hardlink);
   ADD ("schema-migration-v1-to-v2", test_schema_migration_v1_to_v2);
   ADD ("application-id-stamped", test_application_id_is_magpie);
+  ADD ("set-message-unread-renames", test_set_message_unread_renames_and_updates);
+
+  g_test_add_func ("/mail-store/maildir-basename-add-flag", test_maildir_basename_add_flag);
+  g_test_add_func ("/mail-store/maildir-basename-remove-flag", test_maildir_basename_remove_flag);
 
 #undef ADD
 

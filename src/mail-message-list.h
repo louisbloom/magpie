@@ -24,12 +24,25 @@ void mail_message_list_load (MailMessageList *self,
  * receiver should duplicate before any operation that could reset the
  * backend's arena. */
 
+/* Reflect a "now read" change for @message_id in the currently
+ * loaded list. No-op if the message isn't in the displayed folder.
+ * Mutates the borrowed meta in place and re-binds the matching row so
+ * the bold "heading" style drops off without a full reload. */
+void mail_message_list_mark_read (MailMessageList *self,
+                                  const char *message_id);
+
 /* Test-only: borrowed pointer to the internal GtkListView. */
 GtkListView *_mail_message_list_get_list_view_for_test (MailMessageList *self);
 
 /* Test-only: borrowed pointer to the backing GListStore (item count
  * is the true row count regardless of how many widgets are realised). */
 GListModel *_mail_message_list_get_model_for_test (MailMessageList *self);
+
+/* Test-only: borrowed MailMessageMeta for the row at @index, or NULL
+ * if out of range. The pointer follows the backend arena's lifetime
+ * (valid until the next load on this widget's current backend). */
+const MailMessageMeta *_mail_message_list_get_meta_for_test (MailMessageList *self,
+                                                             guint index);
 
 /* Test-only: borrowed pointer to the internal state GtkStack. */
 GtkStack *_mail_message_list_get_stack_for_test (MailMessageList *self);

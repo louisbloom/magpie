@@ -152,6 +152,46 @@ test_activation_emits_signal (Fixture *f, gconstpointer ud)
   g_free (cap.subject);
 }
 
+/* Regression: when the activation handler marks a message read, the
+ * list pane should immediately drop the bold "heading" styling on
+ * that row without waiting for the next folder reload. The
+ * mark-read helper mutates the borrowed meta in place and emits
+ * items-changed; assert that the meta seen by the row is now
+ * unread=FALSE. (Asserting the CSS class would require a realised
+ * row; the meta is the value factory_bind reads on every rebind, so
+ * checking it is equivalent.) */
+static void
+test_mark_read_flips_unread (Fixture *f, gconstpointer ud)
+{
+  GListModel *model = _mail_message_list_get_model_for_test (f->list);
+  g_assert_nonnull (model);
+
+  /* Fixture seeds m2 as the single unread row. Find its index by
+   * matching meta->id. */
+  guint n = g_list_model_get_n_items (model);
+  guint idx = G_MAXUINT;
+  for (guint i = 0; i < n; i++)
+    {
+      const MailMessageMeta *meta = _mail_message_list_get_meta_for_test (f->list, i);
+      if (meta != NULL && g_strcmp0 (meta->id, "m2") == 0)
+        {
+          idx = i;
+          break;
+        }
+    }
+  g_assert_cmpuint (idx, !=, G_MAXUINT);
+  g_assert_true (_mail_message_list_get_meta_for_test (f->list, idx)->unread);
+
+  mail_message_list_mark_read (f->list, "m2");
+  pump_main_loop ();
+  g_assert_false (_mail_message_list_get_meta_for_test (f->list, idx)->unread);
+
+  /* Unknown id is a no-op (no crash, no state change). */
+  mail_message_list_mark_read (f->list, "no-such-id");
+  pump_main_loop ();
+  g_assert_false (_mail_message_list_get_meta_for_test (f->list, idx)->unread);
+}
+
 static void
 test_large_folder_virtualises_rows (Fixture *f, gconstpointer ud)
 {
@@ -399,6 +439,8 @@ main (int argc,
               Fixture, NULL, fixture_set_up, test_single_click_activates, fixture_tear_down);
   g_test_add ("/message-list/activation-emits-signal",
               Fixture, NULL, fixture_set_up, test_activation_emits_signal, fixture_tear_down);
+  g_test_add ("/message-list/mark-read-flips-unread",
+              Fixture, NULL, fixture_set_up, test_mark_read_flips_unread, fixture_tear_down);
   g_test_add ("/message-list/large-folder-virtualises",
               Fixture, NULL, fixture_set_up, test_large_folder_virtualises_rows, fixture_tear_down);
   g_test_add ("/message-list/no-warnings-when-realized",

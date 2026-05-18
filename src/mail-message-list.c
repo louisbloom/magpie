@@ -228,6 +228,39 @@ on_list_view_activate (GtkListView *list_view,
                  self->current_backend, item->meta->id, item->meta->subject);
 }
 
+void
+mail_message_list_mark_read (MailMessageList *self,
+                             const char *message_id)
+{
+  g_return_if_fail (MAIL_IS_MESSAGE_LIST (self));
+  if (message_id == NULL)
+    return;
+
+  guint n = g_list_model_get_n_items (G_LIST_MODEL (self->store));
+  for (guint i = 0; i < n; i++)
+    {
+      g_autoptr (MailMessageRowItem) item = g_list_model_get_item (G_LIST_MODEL (self->store), i);
+      if (item == NULL || item->meta == NULL || item->meta->id == NULL)
+        continue;
+      if (g_strcmp0 (item->meta->id, message_id) != 0)
+        continue;
+
+      if (!item->meta->unread)
+        return; /* already styled as read; nothing to refresh */
+
+      /* The MailMessageMeta is borrowed from the backend's arena. The
+       * `const` on the row item's pointer is borrow discipline (so
+       * factory_bind treats it as read-only), not enforcement — the
+       * arena memory is plain malloc. Mutating the unread bit here
+       * lets the next bind pick up the new value; emitting
+       * items-changed on the row drives GtkListView to rebind it. */
+      MailMessageMeta *meta = (MailMessageMeta *) item->meta;
+      meta->unread = FALSE;
+      g_list_model_items_changed (G_LIST_MODEL (self->store), i, 1, 1);
+      return;
+    }
+}
+
 /* --- load -------------------------------------------------------- */
 
 typedef struct
@@ -319,6 +352,15 @@ _mail_message_list_get_model_for_test (MailMessageList *self)
 {
   g_return_val_if_fail (MAIL_IS_MESSAGE_LIST (self), NULL);
   return G_LIST_MODEL (self->store);
+}
+
+const MailMessageMeta *
+_mail_message_list_get_meta_for_test (MailMessageList *self,
+                                      guint index)
+{
+  g_return_val_if_fail (MAIL_IS_MESSAGE_LIST (self), NULL);
+  g_autoptr (MailMessageRowItem) item = g_list_model_get_item (G_LIST_MODEL (self->store), index);
+  return item != NULL ? item->meta : NULL;
 }
 
 GtkStack *

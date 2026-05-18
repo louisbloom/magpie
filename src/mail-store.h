@@ -124,6 +124,19 @@ gboolean mail_store_delete_message (MailStore *self,
                                     const char *remote_id,
                                     GError **error);
 
+/* Toggle the Maildir `S` (seen) flag for @remote_id. Per the project
+ * rule, the on-disk file is the source of truth: this renames the
+ * file in cur/ to add or remove `S` from its `:2,FLAGS` info suffix,
+ * then updates messages.filename and messages.unread to track. On
+ * rename failure (typically ENOENT from a parallel mutator), sqlite
+ * is left untouched and the reconciler will catch up to disk on the
+ * next sync pass. Unknown @remote_id is a no-op success — the local
+ * index may not have caught up to remote state yet. */
+gboolean mail_store_set_message_unread (MailStore *self,
+                                        const char *remote_id,
+                                        gboolean unread,
+                                        GError **error);
+
 /* --- raw RFC822 file IO -------------------------------------- */
 
 /* Write @bytes to <root>/<dir_name>/tmp/<name>, fsync, rename into
@@ -141,6 +154,15 @@ GBytes *mail_store_read_raw (MailStore *self,
                              const char *dir_name,
                              const char *filename,
                              GError **error);
+
+/* Test-only: parse and reshape a Maildir basename's `:2,FLAGS` info
+ * suffix. Inserts/removes @flag in the spec-mandated alphabetical
+ * order (DFPRST). Returned string is g_malloc'd. Production code uses
+ * the static helpers inside mail-store.c. */
+char *_mail_store_maildir_basename_add_flag_for_test (const char *basename,
+                                                      char flag);
+char *_mail_store_maildir_basename_remove_flag_for_test (const char *basename,
+                                                         char flag);
 
 /* Hardlink an existing body file into another folder. Used by the
  * sync engine when dedupping cross-folder duplicates: one fetch,

@@ -3,9 +3,11 @@
 #include "config.h"
 
 #include "mail-account-page.h"
+#include "mail-account.h"
 #include "mail-message-list.h"
 #include "mail-message-view.h"
 #include "mail-sidebar.h"
+#include "mail-store.h"
 #include "mail-window.h"
 
 struct _MailWindow
@@ -149,6 +151,20 @@ on_message_activated (MailMessageList *list,
                                  (subject != NULL && subject[0] != '\0') ? subject : "Message");
   adw_navigation_view_push_by_tag (self->nav_view, "message-view");
   mail_message_view_load (self->message_view, backend, message_id);
+
+  /* Maildir is the source of truth: rename the file in cur/ to add
+   * the `S` flag and flip sqlite to match. Test accounts have no
+   * store; the in-memory list refresh below still fires so widget
+   * tests can observe the row restyle. */
+  if (self->current_account != NULL && self->current_account->store != NULL)
+    {
+      g_autoptr (GError) error = NULL;
+      if (!mail_store_set_message_unread (self->current_account->store,
+                                          message_id, FALSE, &error))
+        g_warning ("mark read failed: %s",
+                   error != NULL ? error->message : "(no error)");
+    }
+  mail_message_list_mark_read (self->message_list, message_id);
 }
 
 static void
