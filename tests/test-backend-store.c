@@ -116,8 +116,8 @@ static void
 seed_store (Fixture *f)
 {
   g_autoptr (GError) error = NULL;
-  g_assert_true (mail_store_upsert_folder (f->store, "inbox", "Inbox", NULL, 5, 10, NULL, &error));
-  g_assert_true (mail_store_upsert_folder (f->store, "drafts", "Drafts", NULL, 0, 3, NULL, &error));
+  g_assert_true (mail_store_upsert_folder (f->store, "inbox", "Inbox", NULL, NULL, &error));
+  g_assert_true (mail_store_upsert_folder (f->store, "drafts", "Drafts", NULL, NULL, &error));
   g_assert_no_error (error);
 
   struct
@@ -141,7 +141,7 @@ seed_store (Fixture *f)
                                            &filename, &error));
       g_assert_true (mail_store_upsert_message (f->store, "inbox", seed[i].id, NULL, filename,
                                                 seed[i].subject, seed[i].from,
-                                                seed[i].t, seed[i].unread, NULL, &error));
+                                                seed[i].t, seed[i].unread, &error));
       g_assert_no_error (error);
     }
 }

@@ -84,8 +84,7 @@ test_upsert_folder_creates_maildir_dirs (Fixture *f,
 {
   g_autoptr (GError) error = NULL;
   const char *dir_name = NULL;
-  g_assert_true (mail_store_upsert_folder (f->store, "rid-INBOX", "INBOX", NULL,
-                                           3, 42, &dir_name, &error));
+  g_assert_true (mail_store_upsert_folder (f->store, "rid-INBOX", "INBOX", NULL, &dir_name, &error));
   g_assert_no_error (error);
   g_assert_cmpstr (dir_name, ==, "INBOX");
 
@@ -108,11 +107,9 @@ test_list_folders_returns_inserted (Fixture *f,
    * messages table. Both folders are empty here, so the listed
    * counts are 0 regardless of what we passed in. The pin against
    * the cached column is in test_list_folders_counts_derive_from_messages. */
-  g_assert_true (mail_store_upsert_folder (f->store, "rid-INBOX", "INBOX", NULL,
-                                           3, 42, NULL, &error));
+  g_assert_true (mail_store_upsert_folder (f->store, "rid-INBOX", "INBOX", NULL, NULL, &error));
   g_assert_no_error (error);
-  g_assert_true (mail_store_upsert_folder (f->store, "rid-Sent", "Sent", NULL,
-                                           0, 99, NULL, &error));
+  g_assert_true (mail_store_upsert_folder (f->store, "rid-Sent", "Sent", NULL, NULL, &error));
   g_assert_no_error (error);
 
   GPtrArray *folders = mail_store_list_folders (f->store, &f->arena, &error);
@@ -148,19 +145,18 @@ test_list_folders_counts_derive_from_messages (Fixture *f,
   /* Upsert a folder with deliberately wrong cached counts — what a
    * server would report — so we can prove the returned values come
    * from the messages table, not from these arguments. */
-  g_assert_true (mail_store_upsert_folder (f->store, "rid-INBOX", "INBOX", NULL,
-                                           999, 999, NULL, &error));
+  g_assert_true (mail_store_upsert_folder (f->store, "rid-INBOX", "INBOX", NULL, NULL, &error));
   g_assert_no_error (error);
 
   /* Two unread, one read. Local truth: unread=2, total=3. */
   g_assert_true (mail_store_upsert_message (f->store, "rid-INBOX", "msg-u1", NULL, "f1",
-                                            "S1", "a@x", 1700000000, TRUE, NULL, &error));
+                                            "S1", "a@x", 1700000000, TRUE, &error));
   g_assert_no_error (error);
   g_assert_true (mail_store_upsert_message (f->store, "rid-INBOX", "msg-u2", NULL, "f2",
-                                            "S2", "a@x", 1700000001, TRUE, NULL, &error));
+                                            "S2", "a@x", 1700000001, TRUE, &error));
   g_assert_no_error (error);
   g_assert_true (mail_store_upsert_message (f->store, "rid-INBOX", "msg-r1", NULL, "f3",
-                                            "S3", "a@x", 1700000002, FALSE, NULL, &error));
+                                            "S3", "a@x", 1700000002, FALSE, &error));
   g_assert_no_error (error);
 
   GPtrArray *folders = mail_store_list_folders (f->store, &f->arena, &error);
@@ -178,14 +174,13 @@ test_upsert_folder_update_does_not_rename_dir (Fixture *f,
 {
   g_autoptr (GError) error = NULL;
   const char *dir1 = NULL;
-  g_assert_true (mail_store_upsert_folder (f->store, "rid-INBOX", "INBOX", NULL,
-                                           3, 42, &dir1, &error));
+  g_assert_true (mail_store_upsert_folder (f->store, "rid-INBOX", "INBOX", NULL, &dir1, &error));
   g_assert_no_error (error);
   g_autofree char *dir1_copy = g_strdup (dir1);
   /* Update counts: dir_name should stay. */
   const char *dir2 = NULL;
   g_assert_true (mail_store_upsert_folder (f->store, "rid-INBOX", "INBOX (renamed)", NULL,
-                                           5, 50, &dir2, &error));
+                                           &dir2, &error));
   g_assert_no_error (error);
   g_assert_cmpstr (dir2, ==, dir1_copy);
 
@@ -208,13 +203,13 @@ test_collision_suffixes_with_tilde (Fixture *f,
 {
   g_autoptr (GError) error = NULL;
   const char *d1 = NULL, *d2 = NULL, *d3 = NULL;
-  g_assert_true (mail_store_upsert_folder (f->store, "rid-1", "INBOX", NULL, 0, 0, &d1, &error));
+  g_assert_true (mail_store_upsert_folder (f->store, "rid-1", "INBOX", NULL, &d1, &error));
   g_assert_no_error (error);
   g_assert_cmpstr (d1, ==, "INBOX");
-  g_assert_true (mail_store_upsert_folder (f->store, "rid-2", "INBOX", NULL, 0, 0, &d2, &error));
+  g_assert_true (mail_store_upsert_folder (f->store, "rid-2", "INBOX", NULL, &d2, &error));
   g_assert_no_error (error);
   g_assert_cmpstr (d2, ==, "INBOX~2");
-  g_assert_true (mail_store_upsert_folder (f->store, "rid-3", "INBOX", NULL, 0, 0, &d3, &error));
+  g_assert_true (mail_store_upsert_folder (f->store, "rid-3", "INBOX", NULL, &d3, &error));
   g_assert_no_error (error);
   g_assert_cmpstr (d3, ==, "INBOX~3");
 }
@@ -225,7 +220,7 @@ test_slash_in_display_name_sanitized (Fixture *f,
 {
   g_autoptr (GError) error = NULL;
   const char *dir_name = NULL;
-  g_assert_true (mail_store_upsert_folder (f->store, "rid-X", "foo/bar", NULL, 0, 0,
+  g_assert_true (mail_store_upsert_folder (f->store, "rid-X", "foo/bar", NULL,
                                            &dir_name, &error));
   g_assert_no_error (error);
   g_assert_cmpstr (dir_name, ==, "foo_bar");
@@ -239,7 +234,7 @@ test_write_then_read_raw_roundtrip (Fixture *f,
                                     gconstpointer data)
 {
   g_autoptr (GError) error = NULL;
-  g_assert_true (mail_store_upsert_folder (f->store, "rid-INBOX", "INBOX", NULL, 0, 0,
+  g_assert_true (mail_store_upsert_folder (f->store, "rid-INBOX", "INBOX", NULL,
                                            NULL, &error));
   g_assert_no_error (error);
 
@@ -272,17 +267,17 @@ test_message_upsert_and_list (Fixture *f,
                               gconstpointer data)
 {
   g_autoptr (GError) error = NULL;
-  g_assert_true (mail_store_upsert_folder (f->store, "rid-INBOX", "INBOX", NULL, 0, 0,
+  g_assert_true (mail_store_upsert_folder (f->store, "rid-INBOX", "INBOX", NULL,
                                            NULL, &error));
   g_assert_no_error (error);
 
   g_assert_true (mail_store_upsert_message (f->store, "rid-INBOX", "msg-1", NULL, "file-1",
                                             "Hello", "alice@example.com",
-                                            1700000000, TRUE, NULL, &error));
+                                            1700000000, TRUE, &error));
   g_assert_no_error (error);
   g_assert_true (mail_store_upsert_message (f->store, "rid-INBOX", "msg-2", NULL, "file-2",
                                             "Hi", "bob@example.com",
-                                            1700000050, FALSE, NULL, &error));
+                                            1700000050, FALSE, &error));
   g_assert_no_error (error);
 
   GPtrArray *msgs = mail_store_list_messages (f->store, "rid-INBOX", 10, &f->arena, &error);
@@ -304,10 +299,10 @@ test_message_location_lookup (Fixture *f,
                               gconstpointer data)
 {
   g_autoptr (GError) error = NULL;
-  g_assert_true (mail_store_upsert_folder (f->store, "rid-INBOX", "INBOX", NULL, 0, 0,
+  g_assert_true (mail_store_upsert_folder (f->store, "rid-INBOX", "INBOX", NULL,
                                            NULL, &error));
   g_assert_true (mail_store_upsert_message (f->store, "rid-INBOX", "msg-1", NULL, "filename.eml",
-                                            NULL, NULL, 0, FALSE, NULL, &error));
+                                            NULL, NULL, 0, FALSE, &error));
   g_assert_no_error (error);
 
   const char *dir = NULL, *file = NULL;
@@ -328,7 +323,7 @@ test_message_delete_unlinks_file (Fixture *f,
                                   gconstpointer data)
 {
   g_autoptr (GError) error = NULL;
-  g_assert_true (mail_store_upsert_folder (f->store, "rid-INBOX", "INBOX", NULL, 0, 0,
+  g_assert_true (mail_store_upsert_folder (f->store, "rid-INBOX", "INBOX", NULL,
                                            NULL, &error));
   /* Write a real file and link a message to it. */
   const char *payload = "hi";
@@ -336,7 +331,7 @@ test_message_delete_unlinks_file (Fixture *f,
   g_autofree char *filename = NULL;
   g_assert_true (mail_store_write_raw (f->store, "INBOX", in, FALSE, &filename, &error));
   g_assert_true (mail_store_upsert_message (f->store, "rid-INBOX", "msg-1", NULL, filename,
-                                            NULL, NULL, 0, FALSE, NULL, &error));
+                                            NULL, NULL, 0, FALSE, &error));
   g_assert_no_error (error);
   g_autofree char *path = g_build_filename (f->root, "INBOX", "cur", filename, NULL);
   g_assert_true (g_file_test (path, G_FILE_TEST_EXISTS));
@@ -357,10 +352,10 @@ test_folder_delete_drops_dir_and_cascades (Fixture *f,
                                            gconstpointer data)
 {
   g_autoptr (GError) error = NULL;
-  g_assert_true (mail_store_upsert_folder (f->store, "rid-INBOX", "INBOX", NULL, 0, 0,
+  g_assert_true (mail_store_upsert_folder (f->store, "rid-INBOX", "INBOX", NULL,
                                            NULL, &error));
   g_assert_true (mail_store_upsert_message (f->store, "rid-INBOX", "msg-1", NULL, "f", NULL,
-                                            NULL, 0, FALSE, NULL, &error));
+                                            NULL, 0, FALSE, &error));
   g_assert_no_error (error);
 
   g_assert_true (mail_store_delete_folder (f->store, "rid-INBOX", &error));
@@ -387,9 +382,9 @@ test_locate_by_content_key (Fixture *f,
   /* Two folders share a message body keyed by content_key. The store
    * locates it by key regardless of which folder asked. */
   g_autoptr (GError) error = NULL;
-  g_assert_true (mail_store_upsert_folder (f->store, "rid-INBOX", "INBOX", NULL, 0, 0,
+  g_assert_true (mail_store_upsert_folder (f->store, "rid-INBOX", "INBOX", NULL,
                                            NULL, &error));
-  g_assert_true (mail_store_upsert_folder (f->store, "rid-LABEL", "Travel", NULL, 0, 0,
+  g_assert_true (mail_store_upsert_folder (f->store, "rid-LABEL", "Travel", NULL,
                                            NULL, &error));
 
   const char *payload = "From: a@b\r\n\r\nshared body\r\n";
@@ -399,7 +394,7 @@ test_locate_by_content_key (Fixture *f,
                                        &inbox_name, &error));
   g_assert_true (mail_store_upsert_message (f->store, "rid-INBOX", "msg-1",
                                             "<mid@example.com>", inbox_name,
-                                            "shared", "a@b", 100, FALSE, NULL, &error));
+                                            "shared", "a@b", 100, FALSE, &error));
   g_assert_no_error (error);
 
   const char *dir = NULL, *file = NULL;
@@ -425,9 +420,9 @@ test_link_raw_creates_hardlink (Fixture *f,
   /* mail_store_link_raw must create a hardlink so the body is stored
    * once on disk regardless of how many folders reference it. */
   g_autoptr (GError) error = NULL;
-  g_assert_true (mail_store_upsert_folder (f->store, "rid-INBOX", "INBOX", NULL, 0, 0,
+  g_assert_true (mail_store_upsert_folder (f->store, "rid-INBOX", "INBOX", NULL,
                                            NULL, &error));
-  g_assert_true (mail_store_upsert_folder (f->store, "rid-LABEL", "Travel", NULL, 0, 0,
+  g_assert_true (mail_store_upsert_folder (f->store, "rid-LABEL", "Travel", NULL,
                                            NULL, &error));
 
   const char *payload = "X-Mid: 1\r\n\r\nbody\r\n";
@@ -465,7 +460,7 @@ test_reconcile_folder_from_disk (Fixture *f,
                                  gconstpointer data)
 {
   g_autoptr (GError) error = NULL;
-  g_assert_true (mail_store_upsert_folder (f->store, "rid-INBOX", "INBOX", NULL, 0, 0,
+  g_assert_true (mail_store_upsert_folder (f->store, "rid-INBOX", "INBOX", NULL,
                                            NULL, &error));
 
   /* Write an unread file (no `S` in its info suffix) and upsert a
@@ -476,7 +471,7 @@ test_reconcile_folder_from_disk (Fixture *f,
   g_assert_true (mail_store_write_raw (f->store, "INBOX", in, FALSE, &name, &error));
   g_assert_false (g_str_has_suffix (name, ":2,S"));
   g_assert_true (mail_store_upsert_message (f->store, "rid-INBOX", "msg-1", NULL, name,
-                                            "hi", "a@x", 1700000000, TRUE, NULL, &error));
+                                            "hi", "a@x", 1700000000, TRUE, &error));
   g_assert_no_error (error);
 
   /* Pretend mutt opened the message and marked it read: rename the
@@ -625,7 +620,7 @@ test_set_message_unread_renames_and_updates (Fixture *f,
                                              gconstpointer data)
 {
   g_autoptr (GError) error = NULL;
-  g_assert_true (mail_store_upsert_folder (f->store, "rid-INBOX", "INBOX", NULL, 0, 0,
+  g_assert_true (mail_store_upsert_folder (f->store, "rid-INBOX", "INBOX", NULL,
                                            NULL, &error));
   g_assert_no_error (error);
 
@@ -640,8 +635,7 @@ test_set_message_unread_renames_and_updates (Fixture *f,
   g_assert_true (g_str_has_suffix (write_name, ":2,"));
 
   g_assert_true (mail_store_upsert_message (f->store, "rid-INBOX", "msg-1", NULL, write_name,
-                                            "hi", "a@example.com", 1700000000, TRUE,
-                                            NULL, &error));
+                                            "hi", "a@example.com", 1700000000, TRUE, &error));
   g_assert_no_error (error);
 
   g_autofree char *old_path = g_build_filename (f->root, "INBOX", "cur", write_name, NULL);
@@ -719,14 +713,52 @@ test_application_id_is_magpie (Fixture *f,
   sqlite3_close (probe);
 }
 
-static void
-test_schema_migration_v1_to_v2 (Fixture *f,
-                                gconstpointer data)
+/* Returns the count of rows in sqlite_master matching @name. Helper for
+ * "this table exists" / "this table is gone" assertions. */
+static int
+count_sqlite_objects (const char *dbpath,
+                      const char *kind,
+                      const char *name)
 {
-  /* Simulate an existing v1 store by reaching into the sqlite db and
-   * dropping the content_key column + bumping user_version back to 1.
-   * Reopening the store must run the migration and produce a working
-   * content_key column. */
+  sqlite3 *probe = NULL;
+  g_assert_cmpint (sqlite3_open (dbpath, &probe), ==, SQLITE_OK);
+  sqlite3_stmt *st = NULL;
+  g_assert_cmpint (sqlite3_prepare_v2 (probe,
+                                       "SELECT COUNT(*) FROM sqlite_master"
+                                       " WHERE type = ? AND name = ?;",
+                                       -1, &st, NULL),
+                   ==, SQLITE_OK);
+  sqlite3_bind_text (st, 1, kind, -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text (st, 2, name, -1, SQLITE_TRANSIENT);
+  g_assert_cmpint (sqlite3_step (st), ==, SQLITE_ROW);
+  int n = sqlite3_column_int (st, 0);
+  sqlite3_finalize (st);
+  sqlite3_close (probe);
+  return n;
+}
+
+static int
+read_user_version (const char *dbpath)
+{
+  sqlite3 *probe = NULL;
+  g_assert_cmpint (sqlite3_open (dbpath, &probe), ==, SQLITE_OK);
+  sqlite3_stmt *st = NULL;
+  g_assert_cmpint (sqlite3_prepare_v2 (probe, "PRAGMA user_version;", -1, &st, NULL),
+                   ==, SQLITE_OK);
+  g_assert_cmpint (sqlite3_step (st), ==, SQLITE_ROW);
+  int v = sqlite3_column_int (st, 0);
+  sqlite3_finalize (st);
+  sqlite3_close (probe);
+  return v;
+}
+
+static void
+test_schema_migration_v1_to_current (Fixture *f,
+                                     gconstpointer data)
+{
+  /* Simulate an existing v1 store and verify reopen migrates straight
+   * to the current schema version (v3): content_key column added,
+   * sync_state table dropped. */
   g_autoptr (GError) error = NULL;
   mail_store_close (f->store);
   f->store = NULL;
@@ -735,9 +767,9 @@ test_schema_migration_v1_to_v2 (Fixture *f,
   sqlite3 *db = NULL;
   g_assert_cmpint (sqlite3_open (dbpath, &db), ==, SQLITE_OK);
   char *err = NULL;
-  /* Recreate the v1 messages schema (no content_key) and reset
-   * user_version. SQLite ALTER TABLE can't drop a column on older
-   * versions, so DROP + recreate is easier here. */
+  /* Recreate the v1 messages schema (no content_key), keep the
+   * sync_state table that v1/v2 created so the v3 DROP migration has
+   * something to remove, and reset user_version. */
   const char *rewind =
       "DROP TABLE IF EXISTS messages;"
       "CREATE TABLE messages ("
@@ -751,6 +783,13 @@ test_schema_migration_v1_to_v2 (Fixture *f,
       "  unread           INTEGER NOT NULL DEFAULT 0,"
       "  flags            TEXT"
       ");"
+      "CREATE TABLE IF NOT EXISTS sync_state ("
+      "  folder_stable_id TEXT PRIMARY KEY REFERENCES folders(stable_id) ON DELETE CASCADE,"
+      "  delta_token      TEXT,"
+      "  uidvalidity      INTEGER,"
+      "  uidnext          INTEGER,"
+      "  last_synced_unix INTEGER"
+      ");"
       "PRAGMA user_version = 1;";
   g_assert_cmpint (sqlite3_exec (db, rewind, NULL, NULL, &err), ==, SQLITE_OK);
   sqlite3_close (db);
@@ -761,11 +800,11 @@ test_schema_migration_v1_to_v2 (Fixture *f,
   g_assert_nonnull (f->store);
 
   /* After migration, content_key works end-to-end. */
-  g_assert_true (mail_store_upsert_folder (f->store, "rid-INBOX", "INBOX", NULL, 0, 0,
+  g_assert_true (mail_store_upsert_folder (f->store, "rid-INBOX", "INBOX", NULL,
                                            NULL, &error));
   g_assert_true (mail_store_upsert_message (f->store, "rid-INBOX", "msg-1",
                                             "<post-migration@x>", "f",
-                                            NULL, NULL, 0, FALSE, NULL, &error));
+                                            NULL, NULL, 0, FALSE, &error));
   g_assert_no_error (error);
   const char *dir = NULL, *file = NULL;
   g_assert_true (mail_store_locate_body_by_content_key (f->store, "<post-migration@x>",
@@ -773,17 +812,124 @@ test_schema_migration_v1_to_v2 (Fixture *f,
   g_assert_cmpstr (dir, ==, "INBOX");
   g_assert_cmpstr (file, ==, "f");
 
-  /* PRAGMA user_version is 2 now. */
   g_autofree char *dbpath2 = g_build_filename (f->root, "state.db", NULL);
-  sqlite3 *probe = NULL;
-  g_assert_cmpint (sqlite3_open (dbpath2, &probe), ==, SQLITE_OK);
-  sqlite3_stmt *st = NULL;
-  g_assert_cmpint (sqlite3_prepare_v2 (probe, "PRAGMA user_version;", -1, &st, NULL),
-                   ==, SQLITE_OK);
-  g_assert_cmpint (sqlite3_step (st), ==, SQLITE_ROW);
-  g_assert_cmpint (sqlite3_column_int (st, 0), ==, 2);
-  sqlite3_finalize (st);
-  sqlite3_close (probe);
+  g_assert_cmpint (read_user_version (dbpath2), ==, 3);
+  /* v3 drops the dead sync_state table. */
+  g_assert_cmpint (count_sqlite_objects (dbpath2, "table", "sync_state"), ==, 0);
+}
+
+/* Pin the v2→v3 migration in isolation: a store with the v2 schema
+ * (content_key present, sync_state present, user_version=2) must, on
+ * next open, drop sync_state and bump user_version to 3. */
+static void
+test_schema_migration_v2_to_v3 (Fixture *f,
+                                gconstpointer data)
+{
+  g_autoptr (GError) error = NULL;
+  mail_store_close (f->store);
+  f->store = NULL;
+
+  g_autofree char *dbpath = g_build_filename (f->root, "state.db", NULL);
+  sqlite3 *db = NULL;
+  g_assert_cmpint (sqlite3_open (dbpath, &db), ==, SQLITE_OK);
+  char *err = NULL;
+  /* The current schema already has content_key; we just need to make
+   * sure sync_state exists and rewind user_version to 2. */
+  const char *rewind =
+      "CREATE TABLE IF NOT EXISTS sync_state ("
+      "  folder_stable_id TEXT PRIMARY KEY REFERENCES folders(stable_id) ON DELETE CASCADE,"
+      "  delta_token      TEXT,"
+      "  uidvalidity      INTEGER,"
+      "  uidnext          INTEGER,"
+      "  last_synced_unix INTEGER"
+      ");"
+      "PRAGMA user_version = 2;";
+  g_assert_cmpint (sqlite3_exec (db, rewind, NULL, NULL, &err), ==, SQLITE_OK);
+  sqlite3_close (db);
+  /* Sanity: sync_state is in place before reopen. */
+  g_assert_cmpint (count_sqlite_objects (dbpath, "table", "sync_state"), ==, 1);
+  g_assert_cmpint (read_user_version (dbpath), ==, 2);
+
+  f->store = mail_store_open (f->root, "test@example.com", &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (f->store);
+
+  g_assert_cmpint (read_user_version (dbpath), ==, 3);
+  g_assert_cmpint (count_sqlite_objects (dbpath, "table", "sync_state"), ==, 0);
+}
+
+/* --- listener registry -------------------------------------------- */
+
+/* Recording listener for the registry plumbing tests. Counts callback
+ * invocations and tracks whether the GDestroyNotify ran. */
+typedef struct
+{
+  int callbacks;
+  int destroyed;
+} ListenerProbe;
+
+static void
+probe_cb (const MailStoreChange *change,
+          gpointer user_data)
+{
+  (void) change;
+  ListenerProbe *p = user_data;
+  p->callbacks++;
+}
+
+static void
+probe_notify (gpointer user_data)
+{
+  ListenerProbe *p = user_data;
+  p->destroyed++;
+}
+
+static void
+test_listener_remove_runs_destroy_notify (Fixture *f,
+                                          gconstpointer data)
+{
+  ListenerProbe p = { 0, 0 };
+  guint id = mail_store_add_listener (f->store, probe_cb, &p, probe_notify);
+  g_assert_cmpuint (id, !=, 0);
+  g_assert_cmpint (p.destroyed, ==, 0);
+  mail_store_remove_listener (f->store, id);
+  g_assert_cmpint (p.destroyed, ==, 1);
+  /* Removing again is a no-op (id no longer registered). */
+  mail_store_remove_listener (f->store, id);
+  g_assert_cmpint (p.destroyed, ==, 1);
+}
+
+static void
+test_listener_close_runs_destroy_notify (Fixture *f,
+                                         gconstpointer data)
+{
+  ListenerProbe p = { 0, 0 };
+  guint id = mail_store_add_listener (f->store, probe_cb, &p, probe_notify);
+  g_assert_cmpuint (id, !=, 0);
+  /* Forcing the store closed mid-fixture must still run the notify
+   * hook so subscribers get a chance to clean up their state. The
+   * teardown function nulls f->store so we don't double-close. */
+  mail_store_close (f->store);
+  f->store = NULL;
+  g_assert_cmpint (p.destroyed, ==, 1);
+}
+
+static void
+test_listener_remove_id_zero_is_noop (Fixture *f,
+                                      gconstpointer data)
+{
+  ListenerProbe p = { 0, 0 };
+  /* Sentinel id 0 is never returned by mail_store_add_listener and
+   * removing it must be a safe no-op (so callers can store 0 to mean
+   * "no subscription"). */
+  mail_store_remove_listener (f->store, 0);
+  guint id = mail_store_add_listener (f->store, probe_cb, &p, probe_notify);
+  g_assert_cmpuint (id, !=, 0);
+  mail_store_remove_listener (f->store, 0);
+  /* The real listener is still registered. */
+  g_assert_cmpint (p.destroyed, ==, 0);
+  mail_store_remove_listener (f->store, id);
+  g_assert_cmpint (p.destroyed, ==, 1);
 }
 
 static void
@@ -791,8 +937,8 @@ test_folder_remote_ids_set (Fixture *f,
                             gconstpointer data)
 {
   g_autoptr (GError) error = NULL;
-  g_assert_true (mail_store_upsert_folder (f->store, "rid-A", "A", NULL, 0, 0, NULL, &error));
-  g_assert_true (mail_store_upsert_folder (f->store, "rid-B", "B", NULL, 0, 0, NULL, &error));
+  g_assert_true (mail_store_upsert_folder (f->store, "rid-A", "A", NULL, NULL, &error));
+  g_assert_true (mail_store_upsert_folder (f->store, "rid-B", "B", NULL, NULL, &error));
   g_assert_no_error (error);
   GHashTable *ids = mail_store_folder_remote_ids (f->store, &error);
   g_assert_no_error (error);
@@ -826,7 +972,11 @@ main (int argc,
   ADD ("folder-remote-ids-set", test_folder_remote_ids_set);
   ADD ("locate-body-by-content-key", test_locate_by_content_key);
   ADD ("link-raw-creates-hardlink", test_link_raw_creates_hardlink);
-  ADD ("schema-migration-v1-to-v2", test_schema_migration_v1_to_v2);
+  ADD ("schema-migration-v1-to-current", test_schema_migration_v1_to_current);
+  ADD ("schema-migration-v2-to-v3", test_schema_migration_v2_to_v3);
+  ADD ("listener-remove-runs-destroy-notify", test_listener_remove_runs_destroy_notify);
+  ADD ("listener-close-runs-destroy-notify", test_listener_close_runs_destroy_notify);
+  ADD ("listener-remove-id-zero-is-noop", test_listener_remove_id_zero_is_noop);
   ADD ("application-id-stamped", test_application_id_is_magpie);
   ADD ("set-message-unread-renames", test_set_message_unread_renames_and_updates);
   ADD ("reconcile-folder-from-disk", test_reconcile_folder_from_disk);

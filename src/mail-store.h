@@ -21,6 +21,42 @@ G_BEGIN_DECLS
 
 typedef struct _MailStore MailStore;
 
+/* Change-notification payload. Emitted synchronously on the GLib
+ * default main context when the store mutates. Subscribers register
+ * with mail_store_add_listener. The strings inside @change are
+ * borrowed and only valid for the duration of the callback. */
+typedef enum
+{
+  MAIL_STORE_CHANGE_MESSAGE_FLAGS,   /* unread flag flipped on @message_id */
+  MAIL_STORE_CHANGE_MESSAGE_ADDED,   /* new row inserted in @folder_id */
+  MAIL_STORE_CHANGE_MESSAGE_REMOVED, /* row removed from @folder_id */
+  MAIL_STORE_CHANGE_FOLDER_COUNTS,   /* @folder_unread / @folder_total recomputed */
+} MailStoreChangeKind;
+
+typedef struct
+{
+  MailStoreChangeKind kind;
+  const char *folder_id;  /* always set */
+  const char *message_id; /* set for MESSAGE_*; NULL for FOLDER_COUNTS */
+  gboolean unread;        /* meaningful for MESSAGE_FLAGS */
+  int folder_unread;      /* meaningful for FOLDER_COUNTS — absolute new count */
+  int folder_total;       /* meaningful for FOLDER_COUNTS — absolute new count */
+} MailStoreChange;
+
+typedef void (*MailStoreChangeCb) (const MailStoreChange *change,
+                                   gpointer user_data);
+
+/* Register a callback for store mutations. Returns a non-zero
+ * listener id that must be paired with mail_store_remove_listener,
+ * or 0 if the store is NULL. @notify (if non-NULL) is called with
+ * @user_data when the listener is removed or the store closes. */
+guint mail_store_add_listener (MailStore *self,
+                               MailStoreChangeCb cb,
+                               gpointer user_data,
+                               GDestroyNotify notify);
+
+void mail_store_remove_listener (MailStore *self, guint id);
+
 /* Open (creating if needed) the store at @account_root for @identity.
  * The directory is created with 0700. Returns NULL on failure. */
 MailStore *mail_store_open (const char *account_root,
@@ -36,15 +72,15 @@ const char *mail_store_root (MailStore *self);
 /* Insert-or-update a folder by remote_id. On first insert, picks a
  * sanitized dir_name (collision-suffixed with ~N if needed), creates
  * <root>/<dir_name>/{cur,new,tmp}/, and writes the row. On update,
- * mutates display_name / unread / total but keeps the existing
- * dir_name. *out_dir_name (if non-NULL) receives a borrowed pointer
- * valid until the next upsert on this store. */
+ * mutates display_name but keeps the existing dir_name. *out_dir_name
+ * (if non-NULL) receives a borrowed pointer valid until the next
+ * upsert on this store. Per-folder unread/total counts are derived
+ * live from the messages table by mail_store_list_folders; they are
+ * not stored on the folder row. */
 gboolean mail_store_upsert_folder (MailStore *self,
                                    const char *remote_id,
                                    const char *display_name,
                                    const char *parent_remote_id,
-                                   int unread,
-                                   int total,
                                    const char **out_dir_name,
                                    GError **error);
 
@@ -82,7 +118,6 @@ gboolean mail_store_upsert_message (MailStore *self,
                                     const char *from_addr,
                                     gint64 received_unix,
                                     gboolean unread,
-                                    const char *flags,
                                     GError **error);
 
 /* Find any existing message row whose content_key matches and return

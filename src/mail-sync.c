@@ -291,8 +291,7 @@ on_folders_done (GObject *src,
 
       const char *dir_name = NULL;
       if (!mail_store_upsert_folder (self->local, f->id, f->display_name,
-                                     f->parent_id, f->unread_count, f->total_count,
-                                     &dir_name, &error))
+                                     f->parent_id, &dir_name, &error))
         {
           /* folders array is borrowed; safe to leave to next list_*. */
           finish_pass (self, error);
@@ -432,7 +431,7 @@ on_messages_done (GObject *src,
               if (!mail_store_upsert_message (self->local, folder_id, m->id,
                                               m->content_key, new_name,
                                               m->subject, m->from, m->received_unix,
-                                              m->unread, NULL, &error))
+                                              m->unread, &error))
                 {
                   g_hash_table_unref (existing);
                   g_hash_table_unref (seen);
@@ -556,7 +555,7 @@ apply_fetch_result (MailSync *self,
     return FALSE;
   if (!mail_store_upsert_message (self->local, it->folder_remote_id, it->message_remote_id,
                                   it->content_key, filename, it->subject, it->from_addr,
-                                  it->received_unix, it->unread, NULL, error))
+                                  it->received_unix, it->unread, error))
     return FALSE;
 
   /* For each same-pass alias of this message: hardlink the freshly
@@ -577,7 +576,7 @@ apply_fetch_result (MailSync *self,
           if (!mail_store_upsert_message (self->local, a->folder_remote_id,
                                           a->message_remote_id, it->content_key,
                                           alias_filename, a->subject, a->from_addr,
-                                          a->received_unix, a->unread, NULL, error))
+                                          a->received_unix, a->unread, error))
             return FALSE;
         }
     }

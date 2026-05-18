@@ -20,6 +20,34 @@ G_BEGIN_DECLS
 typedef struct _MailBackend MailBackend;
 typedef struct _MailBackendVTable MailBackendVTable;
 
+/* Change-notification payload. Mirrors MailStoreChange (mail-store.h)
+ * but expressed at the backend boundary so UI code does not need to
+ * know about MailStore at all. MailBackendStore rebroadcasts every
+ * underlying MailStoreChange via its backend's registry; other
+ * backends (msgraph, imap) never emit — they have no local state to
+ * invalidate. */
+typedef enum
+{
+  MAIL_BACKEND_CHANGE_MESSAGE_FLAGS,
+  MAIL_BACKEND_CHANGE_MESSAGE_ADDED,
+  MAIL_BACKEND_CHANGE_MESSAGE_REMOVED,
+  MAIL_BACKEND_CHANGE_FOLDER_COUNTS,
+} MailBackendChangeKind;
+
+typedef struct
+{
+  MailBackendChangeKind kind;
+  const char *folder_id;
+  const char *message_id;
+  gboolean unread;
+  int folder_unread;
+  int folder_total;
+} MailBackendChange;
+
+typedef void (*MailBackendChangeCb) (MailBackend *backend,
+                                     const MailBackendChange *change,
+                                     gpointer user_data);
+
 typedef struct
 {
   const char *id;
@@ -111,10 +139,33 @@ struct _MailBackend
   MailArena fetch_arena;
   GByteArray *response_buf;
   GString *path_buf;
+  /* Change-notification subscribers. Allocated lazily on the first
+   * mail_backend_add_listener call; mail_backend_destroy frees the
+   * array and invokes any registered GDestroyNotify hooks. */
+  GArray *change_listeners; /* of MailBackendListener; lazy */
+  guint next_listener_id;
   /* Subclasses extend by embedding MailBackend as their first member. */
 };
 
 void mail_backend_destroy (MailBackend *self);
+
+/* Subscribe to change events emitted by @self. Returns a non-zero id
+ * for paired removal, or 0 if @self is NULL. @notify (if non-NULL) is
+ * called with @user_data on removal or backend destroy. */
+guint mail_backend_add_listener (MailBackend *self,
+                                 MailBackendChangeCb cb,
+                                 gpointer user_data,
+                                 GDestroyNotify notify);
+
+void mail_backend_remove_listener (MailBackend *self, guint id);
+
+/* Emit a change event to all current subscribers. Used by
+ * MailBackendStore's rebroadcast bridge and by test code (the fake
+ * backend exposes a thin wrapper for tests to drive UI updates
+ * deterministically). Not used by callers outside backend
+ * implementations. */
+void mail_backend_emit_change (MailBackend *self,
+                               const MailBackendChange *change);
 
 void mail_backend_list_folders_async (MailBackend *self,
                                       GCancellable *cancellable,

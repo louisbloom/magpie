@@ -4,12 +4,103 @@
 
 #include "mail-backend.h"
 
+#include <string.h>
+
+typedef struct
+{
+  guint id;
+  MailBackendChangeCb cb;
+  gpointer user_data;
+  GDestroyNotify notify;
+} MailBackendListener;
+
+static void
+release_listeners (MailBackend *self)
+{
+  if (self->change_listeners == NULL)
+    return;
+  for (guint i = 0; i < self->change_listeners->len; i++)
+    {
+      MailBackendListener *l = &g_array_index (self->change_listeners, MailBackendListener, i);
+      if (l->notify != NULL)
+        l->notify (l->user_data);
+    }
+  g_array_free (self->change_listeners, TRUE);
+  self->change_listeners = NULL;
+}
+
 void
 mail_backend_destroy (MailBackend *self)
 {
   if (self == NULL)
     return;
+  /* Release listeners before the vt->destroy frees the embedding
+   * struct — the GDestroyNotify hooks may reference fields owned by
+   * the subclass and must run before that storage disappears. */
+  release_listeners (self);
   self->vt->destroy (self);
+}
+
+guint
+mail_backend_add_listener (MailBackend *self,
+                           MailBackendChangeCb cb,
+                           gpointer user_data,
+                           GDestroyNotify notify)
+{
+  g_return_val_if_fail (self != NULL, 0);
+  g_return_val_if_fail (cb != NULL, 0);
+
+  if (self->change_listeners == NULL)
+    self->change_listeners = g_array_new (FALSE, FALSE, sizeof (MailBackendListener));
+  if (self->next_listener_id == 0)
+    self->next_listener_id = 1;
+  MailBackendListener l = {
+    .id = self->next_listener_id++,
+    .cb = cb,
+    .user_data = user_data,
+    .notify = notify,
+  };
+  g_array_append_val (self->change_listeners, l);
+  return l.id;
+}
+
+void
+mail_backend_remove_listener (MailBackend *self,
+                              guint id)
+{
+  g_return_if_fail (self != NULL);
+  if (id == 0 || self->change_listeners == NULL)
+    return;
+  for (guint i = 0; i < self->change_listeners->len; i++)
+    {
+      MailBackendListener *l = &g_array_index (self->change_listeners, MailBackendListener, i);
+      if (l->id == id)
+        {
+          GDestroyNotify notify = l->notify;
+          gpointer user_data = l->user_data;
+          g_array_remove_index (self->change_listeners, i);
+          if (notify != NULL)
+            notify (user_data);
+          return;
+        }
+    }
+}
+
+void
+mail_backend_emit_change (MailBackend *self,
+                          const MailBackendChange *change)
+{
+  g_return_if_fail (self != NULL);
+  g_return_if_fail (change != NULL);
+  if (self->change_listeners == NULL || self->change_listeners->len == 0)
+    return;
+  /* Snapshot the listener list so a callback that removes itself or
+   * registers another listener doesn't break iteration. */
+  guint n = self->change_listeners->len;
+  MailBackendListener *snap = g_newa (MailBackendListener, n);
+  memcpy (snap, self->change_listeners->data, n * sizeof (MailBackendListener));
+  for (guint i = 0; i < n; i++)
+    snap[i].cb (self, change, snap[i].user_data);
 }
 
 void

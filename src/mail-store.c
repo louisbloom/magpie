@@ -15,11 +15,12 @@
 #include <fcntl.h>
 #include <glib/gstdio.h>
 #include <sqlite3.h>
+#include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
 
-#define MAIL_STORE_SCHEMA_VERSION 2
+#define MAIL_STORE_SCHEMA_VERSION 3
 
 /* Stamp the sqlite file header so `file(1)` and forensic tooling can
  * identify a stray state.db as Magpie's. Encoded as the fourcc 'Mgpi'
@@ -57,7 +58,20 @@ struct _MailStore
 
   /* Monotonic counter for maildir filename uniqueness within a usec. */
   guint64 filename_counter;
+
+  /* Change-notification subscribers. Fan-out is synchronous on the
+   * caller's thread (always the GLib default main context in practice). */
+  GArray *listeners; /* of StoreListener */
+  guint next_listener_id;
 };
+
+typedef struct
+{
+  guint id;
+  MailStoreChangeCb cb;
+  gpointer user_data;
+  GDestroyNotify notify;
+} StoreListener;
 
 /* --- internal helpers --------------------------------------------- */
 
@@ -249,7 +263,15 @@ ensure_schema (MailStore *self,
 
   /* Base tables — content_key is part of the messages schema for
    * fresh stores. For an existing v1 store the CREATE TABLE IF NOT
-   * EXISTS is a no-op, and we'll add the column via ALTER below. */
+   * EXISTS is a no-op, and we'll add the column via ALTER below.
+   *
+   * folders.unread/total are kept in the schema for backward
+   * compatibility with v2 stores (sqlite < 3.35 lacks DROP COLUMN
+   * and we require ≥ 3.24). They are not bound on insert/update or
+   * read on select — mail_store_list_folders recomputes both via a
+   * live COUNT against the messages table. The DEFAULT 0 from the
+   * CREATE matches the legacy contents. messages.flags is dead weight
+   * for the same reasons. */
   const char *base_ddl =
       "CREATE TABLE IF NOT EXISTS folders ("
       "  stable_id        TEXT PRIMARY KEY,"
@@ -273,14 +295,7 @@ ensure_schema (MailStore *self,
       "  content_key      TEXT"
       ");"
       "CREATE INDEX IF NOT EXISTS messages_folder_received"
-      "  ON messages (folder_stable_id, received_unix DESC);"
-      "CREATE TABLE IF NOT EXISTS sync_state ("
-      "  folder_stable_id TEXT PRIMARY KEY REFERENCES folders(stable_id) ON DELETE CASCADE,"
-      "  delta_token      TEXT,"
-      "  uidvalidity      INTEGER,"
-      "  uidnext          INTEGER,"
-      "  last_synced_unix INTEGER"
-      ");";
+      "  ON messages (folder_stable_id, received_unix DESC);";
   if (!exec_sql (self->db, base_ddl, error))
     return FALSE;
 
@@ -290,6 +305,12 @@ ensure_schema (MailStore *self,
       if (!exec_sql (self->db, "ALTER TABLE messages ADD COLUMN content_key TEXT;", error))
         return FALSE;
     }
+
+  /* The sync_state table (defined as a placeholder for future
+   * delta-token sync in v1/v2 but never read or written by any code
+   * path) is dropped in v3. Idempotent: a no-op for fresh stores. */
+  if (!exec_sql (self->db, "DROP TABLE IF EXISTS sync_state;", error))
+    return FALSE;
 
   /* content_key index, created here (after the column definitely
    * exists) so the path is identical for fresh stores (v=0) and
@@ -321,11 +342,13 @@ prepare_statements (MailStore *self,
     { &self->st_folder_dir_in_use,
       "SELECT 1 FROM folders WHERE dir_name = ? AND stable_id != ? LIMIT 1;" },
     { &self->st_folder_insert,
+      /* unread/total left at the schema DEFAULT 0; the read path
+       * recomputes them live via COUNT against messages. */
       "INSERT INTO folders"
-      " (stable_id, remote_id, display_name, dir_name, parent_remote_id, unread, total)"
-      " VALUES (?, ?, ?, ?, ?, ?, ?);" },
+      " (stable_id, remote_id, display_name, dir_name, parent_remote_id)"
+      " VALUES (?, ?, ?, ?, ?);" },
     { &self->st_folder_update,
-      "UPDATE folders SET display_name = ?, parent_remote_id = ?, unread = ?, total = ?"
+      "UPDATE folders SET display_name = ?, parent_remote_id = ?"
       " WHERE stable_id = ?;" },
     { &self->st_folder_list,
       /* unread and total are derived live from the messages table
@@ -352,9 +375,12 @@ prepare_statements (MailStore *self,
     { &self->st_folder_delete,
       "DELETE FROM folders WHERE remote_id = ?;" },
     { &self->st_message_upsert,
+      /* flags column left at NULL (schema DEFAULT). The Maildir info
+       * suffix in `filename` is the source of truth for per-message
+       * flags; sqlite carries only the unread bit for cheap COUNTs. */
       "INSERT INTO messages"
-      " (stable_id, folder_stable_id, remote_id, filename, subject, from_addr, received_unix, unread, flags, content_key)"
-      " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+      " (stable_id, folder_stable_id, remote_id, filename, subject, from_addr, received_unix, unread, content_key)"
+      " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
       " ON CONFLICT(stable_id) DO UPDATE SET"
       "   folder_stable_id = excluded.folder_stable_id,"
       "   filename = excluded.filename,"
@@ -362,7 +388,6 @@ prepare_statements (MailStore *self,
       "   from_addr = excluded.from_addr,"
       "   received_unix = excluded.received_unix,"
       "   unread = excluded.unread,"
-      "   flags = excluded.flags,"
       "   content_key = COALESCE(excluded.content_key, content_key);" },
     { &self->st_message_list,
       "SELECT m.remote_id, m.subject, m.from_addr, m.received_unix, m.unread"
@@ -419,6 +444,7 @@ mail_store_open (const char *account_root,
   MailStore *self = g_new0 (MailStore, 1);
   self->root = g_strdup (account_root);
   self->identity = g_strdup (identity);
+  self->listeners = g_array_new (FALSE, FALSE, sizeof (StoreListener));
   char hbuf[256];
   if (gethostname (hbuf, sizeof hbuf) != 0)
     g_strlcpy (hbuf, "localhost", sizeof hbuf);
@@ -476,11 +502,82 @@ mail_store_close (MailStore *self)
       sqlite3_finalize (*all[i]);
   if (self->db != NULL)
     sqlite3_close (self->db);
+  if (self->listeners != NULL)
+    {
+      for (guint i = 0; i < self->listeners->len; i++)
+        {
+          StoreListener *l = &g_array_index (self->listeners, StoreListener, i);
+          if (l->notify != NULL)
+            l->notify (l->user_data);
+        }
+      g_array_free (self->listeners, TRUE);
+    }
   g_free (self->root);
   g_free (self->identity);
   g_free (self->hostname);
   g_free (self->last_dir_name);
   g_free (self);
+}
+
+/* --- change-notification registry --------------------------------- */
+
+guint
+mail_store_add_listener (MailStore *self,
+                         MailStoreChangeCb cb,
+                         gpointer user_data,
+                         GDestroyNotify notify)
+{
+  g_return_val_if_fail (self != NULL, 0);
+  g_return_val_if_fail (cb != NULL, 0);
+
+  /* Skip 0 so the caller can use it as a sentinel for "no subscription". */
+  if (self->next_listener_id == 0)
+    self->next_listener_id = 1;
+  StoreListener l = {
+    .id = self->next_listener_id++,
+    .cb = cb,
+    .user_data = user_data,
+    .notify = notify,
+  };
+  g_array_append_val (self->listeners, l);
+  return l.id;
+}
+
+void
+mail_store_remove_listener (MailStore *self,
+                            guint id)
+{
+  g_return_if_fail (self != NULL);
+  if (id == 0)
+    return;
+  for (guint i = 0; i < self->listeners->len; i++)
+    {
+      StoreListener *l = &g_array_index (self->listeners, StoreListener, i);
+      if (l->id == id)
+        {
+          GDestroyNotify notify = l->notify;
+          gpointer user_data = l->user_data;
+          g_array_remove_index (self->listeners, i);
+          if (notify != NULL)
+            notify (user_data);
+          return;
+        }
+    }
+}
+
+G_GNUC_UNUSED static void
+emit_change (MailStore *self,
+             const MailStoreChange *change)
+{
+  /* Snapshot the listener list so a callback that removes itself or
+   * another listener doesn't break our iteration. */
+  guint n = self->listeners->len;
+  if (n == 0)
+    return;
+  StoreListener *snap = g_newa (StoreListener, n);
+  memcpy (snap, self->listeners->data, n * sizeof (StoreListener));
+  for (guint i = 0; i < n; i++)
+    snap[i].cb (change, snap[i].user_data);
 }
 
 const char *
@@ -496,8 +593,6 @@ mail_store_upsert_folder (MailStore *self,
                           const char *remote_id,
                           const char *display_name,
                           const char *parent_remote_id,
-                          int unread,
-                          int total,
                           const char **out_dir_name,
                           GError **error)
 {
@@ -541,8 +636,6 @@ mail_store_upsert_folder (MailStore *self,
         sqlite3_bind_text (st, 5, parent_remote_id, -1, SQLITE_TRANSIENT);
       else
         sqlite3_bind_null (st, 5);
-      sqlite3_bind_int (st, 6, unread);
-      sqlite3_bind_int (st, 7, total);
       if (sqlite3_step (st) != SQLITE_DONE)
         {
           set_sqlite_error (error, self->db, "folder insert");
@@ -562,9 +655,7 @@ mail_store_upsert_folder (MailStore *self,
         sqlite3_bind_text (st, 2, parent_remote_id, -1, SQLITE_TRANSIENT);
       else
         sqlite3_bind_null (st, 2);
-      sqlite3_bind_int (st, 3, unread);
-      sqlite3_bind_int (st, 4, total);
-      sqlite3_bind_text (st, 5, sid, -1, SQLITE_TRANSIENT);
+      sqlite3_bind_text (st, 3, sid, -1, SQLITE_TRANSIENT);
       if (sqlite3_step (st) != SQLITE_DONE)
         {
           set_sqlite_error (error, self->db, "folder update");
@@ -725,7 +816,6 @@ mail_store_upsert_message (MailStore *self,
                            const char *from_addr,
                            gint64 received_unix,
                            gboolean unread,
-                           const char *flags,
                            GError **error)
 {
   g_return_val_if_fail (self != NULL, FALSE);
@@ -752,14 +842,10 @@ mail_store_upsert_message (MailStore *self,
     sqlite3_bind_null (st, 6);
   sqlite3_bind_int64 (st, 7, received_unix);
   sqlite3_bind_int (st, 8, unread ? 1 : 0);
-  if (flags != NULL)
-    sqlite3_bind_text (st, 9, flags, -1, SQLITE_TRANSIENT);
+  if (content_key != NULL)
+    sqlite3_bind_text (st, 9, content_key, -1, SQLITE_TRANSIENT);
   else
     sqlite3_bind_null (st, 9);
-  if (content_key != NULL)
-    sqlite3_bind_text (st, 10, content_key, -1, SQLITE_TRANSIENT);
-  else
-    sqlite3_bind_null (st, 10);
   if (sqlite3_step (st) != SQLITE_DONE)
     {
       set_sqlite_error (error, self->db, "message upsert");

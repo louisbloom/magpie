@@ -20,8 +20,45 @@
 typedef struct
 {
   MailBackend base;
-  MailStore *store; /* borrowed */
+  MailStore *store;        /* borrowed */
+  guint store_listener_id; /* paired with mail_store_remove_listener in destroy */
 } MailBackendStore;
+
+/* Bridge: every MailStoreChange becomes a MailBackendChange of the
+ * matching kind. Field set is the same, the enum tag is renumbered to
+ * stay decoupled from MailStoreChangeKind. */
+static MailBackendChangeKind
+backend_kind_of (MailStoreChangeKind k)
+{
+  switch (k)
+    {
+    case MAIL_STORE_CHANGE_MESSAGE_FLAGS:
+      return MAIL_BACKEND_CHANGE_MESSAGE_FLAGS;
+    case MAIL_STORE_CHANGE_MESSAGE_ADDED:
+      return MAIL_BACKEND_CHANGE_MESSAGE_ADDED;
+    case MAIL_STORE_CHANGE_MESSAGE_REMOVED:
+      return MAIL_BACKEND_CHANGE_MESSAGE_REMOVED;
+    case MAIL_STORE_CHANGE_FOLDER_COUNTS:
+      return MAIL_BACKEND_CHANGE_FOLDER_COUNTS;
+    }
+  g_return_val_if_reached (MAIL_BACKEND_CHANGE_FOLDER_COUNTS);
+}
+
+static void
+on_store_change (const MailStoreChange *src,
+                 gpointer user_data)
+{
+  MailBackendStore *self = user_data;
+  MailBackendChange out = {
+    .kind = backend_kind_of (src->kind),
+    .folder_id = src->folder_id,
+    .message_id = src->message_id,
+    .unread = src->unread,
+    .folder_unread = src->folder_unread,
+    .folder_total = src->folder_total,
+  };
+  mail_backend_emit_change (&self->base, &out);
+}
 
 static void
 reset_arena_and_buffers (MailBackendStore *self)
@@ -216,6 +253,8 @@ mb_store_destroy (MailBackend *base)
 {
   MailBackendStore *self = (MailBackendStore *) base;
   /* self->store is borrowed; not freed here. */
+  if (self->store_listener_id != 0)
+    mail_store_remove_listener (self->store, self->store_listener_id);
   if (self->base.response_buf != NULL)
     g_byte_array_unref (self->base.response_buf);
   if (self->base.path_buf != NULL)
@@ -244,5 +283,8 @@ mail_backend_store_new (MailStore *store)
   mail_arena_init (&self->base.fetch_arena, 4096);
   self->base.response_buf = g_byte_array_new ();
   self->base.path_buf = g_string_sized_new (256);
+  /* Bridge MailStore mutations into MailBackend change events so UI
+   * subscribers don't need to know MailStore exists. */
+  self->store_listener_id = mail_store_add_listener (store, on_store_change, self, NULL);
   return (MailBackend *) self;
 }
