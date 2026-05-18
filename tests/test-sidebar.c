@@ -267,6 +267,46 @@ test_folder_activation_emits_signal (Fixture *f, gconstpointer ud)
   g_free (cap.display_name);
 }
 
+/* Re-clicking the already-selected folder must emit folder-selected
+ * a second time so mail-window can pop the message viewer back off
+ * the navigation stack. The bug surfaced as: user views a message,
+ * then clicks the same Inbox row to "go back", and nothing happens
+ * because GtkListBox::row-selected doesn't fire when the selection
+ * isn't changing. The sidebar now also listens to row-activated
+ * (with activate-on-single-click), which does fire on every click. */
+static void
+test_re_activation_of_selected_folder_emits_again (Fixture *f, gconstpointer ud)
+{
+  SignalCapture cap = { 0 };
+  gulong handler = g_signal_connect (f->sidebar, "folder-selected",
+                                     G_CALLBACK (on_folder_selected), &cap);
+
+  GtkListBox *list_box = _mail_sidebar_get_list_box_for_test (f->sidebar);
+  GtkListBoxRow *inbox = gtk_list_box_get_row_at_index (list_box, 1);
+  g_assert_nonnull (inbox);
+
+  /* First selection: standard row-selected path, one emission. */
+  gtk_list_box_select_row (list_box, inbox);
+  g_assert_cmpuint (cap.count, ==, 1);
+  g_free (cap.folder_id);
+  cap.folder_id = NULL;
+  g_free (cap.display_name);
+  cap.display_name = NULL;
+
+  /* Re-activation of the same row: fires row-activated only
+   * (selection unchanged). The sidebar's new row-activated handler
+   * must dispatch the same way. */
+  g_signal_emit_by_name (list_box, "row-activated", inbox);
+
+  g_assert_cmpuint (cap.count, ==, 2);
+  g_assert_cmpstr (cap.folder_id, ==, "inbox");
+  g_assert_true (cap.backend == f->fake);
+
+  g_signal_handler_disconnect (f->sidebar, handler);
+  g_free (cap.folder_id);
+  g_free (cap.display_name);
+}
+
 typedef struct
 {
   guint count;
@@ -384,6 +424,8 @@ main (int argc,
               Fixture, NULL, fixture_set_up, test_account_selection_emits_signal, fixture_tear_down);
   g_test_add ("/sidebar/account-select-programmatic",
               Fixture, NULL, fixture_set_up, test_mail_sidebar_select_account_programmatic, fixture_tear_down);
+  g_test_add ("/sidebar/folder-reactivation-emits-again",
+              Fixture, NULL, fixture_set_up, test_re_activation_of_selected_folder_emits_again, fixture_tear_down);
   g_test_add ("/sidebar/folder-activation-emits-signal",
               Fixture, NULL, fixture_set_up, test_folder_activation_emits_signal, fixture_tear_down);
   g_test_add ("/sidebar/account-added-signal",

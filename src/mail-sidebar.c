@@ -266,12 +266,17 @@ build_row_widget (gpointer item,
   return build_folder_row (it);
 }
 
+/* Common dispatch for both row-selected (keyboard arrow nav,
+ * programmatic gtk_list_box_select_row, and the initial click on
+ * a different row) and row-activated (every single click,
+ * including re-clicks on the already-selected row). The two
+ * signals fire together on a mouse single-click that changes the
+ * selection — the resulting double-emit is harmless because the
+ * window's on_folder_selected short-circuits the same-folder case. */
 static void
-on_row_selected (GtkListBox *list_box,
-                 GtkListBoxRow *row,
-                 gpointer user_data)
+dispatch_row (MailSidebar *self,
+              GtkListBoxRow *row)
 {
-  MailSidebar *self = MAIL_SIDEBAR (user_data);
   if (row == NULL)
     return;
   guint index = gtk_list_box_row_get_index (row);
@@ -285,6 +290,22 @@ on_row_selected (GtkListBox *list_box,
                    it->title);
   else if (it->kind == MAIL_SIDEBAR_ITEM_ACCOUNT && it->account != NULL)
     g_signal_emit (self, signals[SIGNAL_ACCOUNT_SELECTED], 0, it->account);
+}
+
+static void
+on_row_selected (GtkListBox *list_box,
+                 GtkListBoxRow *row,
+                 gpointer user_data)
+{
+  dispatch_row (MAIL_SIDEBAR (user_data), row);
+}
+
+static void
+on_row_activated (GtkListBox *list_box,
+                  GtkListBoxRow *row,
+                  gpointer user_data)
+{
+  dispatch_row (MAIL_SIDEBAR (user_data), row);
 }
 
 static guint
@@ -547,10 +568,17 @@ mail_sidebar_init (MailSidebar *self)
 
   self->list_box = GTK_LIST_BOX (gtk_list_box_new ());
   gtk_widget_add_css_class (GTK_WIDGET (self->list_box), "navigation-sidebar");
+  /* Activate on every single click — including clicks on the row
+   * that's already selected. row-selected alone wouldn't fire then,
+   * so re-clicking the current folder while the message viewer was
+   * pushed couldn't navigate back to the list. */
+  gtk_list_box_set_activate_on_single_click (self->list_box, TRUE);
   gtk_list_box_bind_model (self->list_box, G_LIST_MODEL (self->store),
                            build_row_widget, self, NULL);
   g_signal_connect (self->list_box, "row-selected",
                     G_CALLBACK (on_row_selected), self);
+  g_signal_connect (self->list_box, "row-activated",
+                    G_CALLBACK (on_row_activated), self);
 
   gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scroller), GTK_WIDGET (self->list_box));
 

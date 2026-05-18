@@ -96,6 +96,16 @@ on_folder_selected (MailSidebar *sidebar,
   MailAccount *acct = account_ptr;
   if (backend == NULL || folder_id == NULL)
     return;
+  /* Re-activating the already-selected folder (e.g. clicking Inbox
+   * while a message is open) means "go back to the list view".
+   * recompute_nav_stack pops any pushed message viewer; skip the
+   * reload — the list already shows this folder, and refetching
+   * would just churn the backend and lose the scroll position. */
+  if (self->current_account == acct && !self->account_mode && g_strcmp0 (self->current_folder_id, folder_id) == 0)
+    {
+      recompute_nav_stack (self);
+      return;
+    }
   self->current_account = acct;
   g_free (self->current_folder_id);
   self->current_folder_id = g_strdup (folder_id);
