@@ -338,6 +338,50 @@ test_markup_special_chars (void)
   mail_backend_destroy (fake);
 }
 
+/* Pin the year-aware date formatting in the list. Backstory: the
+ * subtitle column used to render every date older than today as
+ * "Mon  D", so a message from 2025-02-16 and one from 2026-02-16
+ * looked identical once the year had rolled over. format_received
+ * now takes a third branch — when the message year differs from
+ * the reference "now" year, the year is appended. */
+static void
+test_received_date_year_aware (void)
+{
+  /* Reference "now": 2026-05-18 14:00 local. */
+  g_autoptr (GDateTime) now = g_date_time_new_local (2026, 5, 18, 14, 0, 0);
+  g_assert_nonnull (now);
+
+  /* This-year, earlier date: bare "Mon  D" with %e's leading space
+   * for single-digit days — no year. */
+  g_autoptr (GDateTime) feb_this_year = g_date_time_new_local (2026, 2, 16, 9, 30, 0);
+  g_autofree char *s_this_year = _mail_message_list_format_received_for_test (
+      g_date_time_to_unix (feb_this_year), now);
+  g_assert_cmpstr (s_this_year, ==, "Feb 16");
+
+  /* Previous year: year appended after a comma. */
+  g_autoptr (GDateTime) feb_last_year = g_date_time_new_local (2025, 2, 16, 9, 30, 0);
+  g_autofree char *s_last_year = _mail_message_list_format_received_for_test (
+      g_date_time_to_unix (feb_last_year), now);
+  g_assert_cmpstr (s_last_year, ==, "Feb 16, 2025");
+
+  /* Several years back, end-of-year (two-digit day, no leading space). */
+  g_autoptr (GDateTime) dec_2020 = g_date_time_new_local (2020, 12, 31, 23, 59, 0);
+  g_autofree char *s_old = _mail_message_list_format_received_for_test (
+      g_date_time_to_unix (dec_2020), now);
+  g_assert_cmpstr (s_old, ==, "Dec 31, 2020");
+
+  /* Same calendar day as "now": HH:MM time, not a date. */
+  g_autoptr (GDateTime) today_morning = g_date_time_new_local (2026, 5, 18, 9, 7, 0);
+  g_autofree char *s_today = _mail_message_list_format_received_for_test (
+      g_date_time_to_unix (today_morning), now);
+  g_assert_cmpuint (strlen (s_today), ==, 5);
+  g_assert_true (s_today[2] == ':');
+
+  /* received_unix=0 is the "no date" sentinel from the backends. */
+  g_autofree char *s_empty = _mail_message_list_format_received_for_test (0, now);
+  g_assert_cmpstr (s_empty, ==, "");
+}
+
 int
 main (int argc,
       char *argv[])
@@ -365,5 +409,7 @@ main (int argc,
                    test_empty_folder_shows_folder_empty_state);
   g_test_add_func ("/message-list/no-markup-warnings-for-special-chars",
                    test_markup_special_chars);
+  g_test_add_func ("/message-list/received-date-year-aware",
+                   test_received_date_year_aware);
   return g_test_run ();
 }

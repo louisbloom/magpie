@@ -79,17 +79,41 @@ struct _MailMessageList
 
 G_DEFINE_FINAL_TYPE (MailMessageList, mail_message_list, GTK_TYPE_WIDGET)
 
+/* "now" is taken as a parameter so the formatter is deterministic
+ * under test. Three branches: same day → HH:MM, same year (older
+ * than today) → "Mon  D", different year → "Mon  D, YYYY". The last
+ * branch is what disambiguates a message from Feb 2025 from one
+ * from Feb 2026 once the year rolls over. */
 static char *
-format_received (gint64 received_unix)
+format_received_at (gint64 received_unix,
+                    GDateTime *now)
 {
   if (received_unix <= 0)
     return g_strdup ("");
   g_autoptr (GDateTime) when = g_date_time_new_from_unix_local (received_unix);
   if (when == NULL)
     return g_strdup ("");
+  int when_year = g_date_time_get_year (when);
+  int now_year = g_date_time_get_year (now);
+  if (when_year == now_year && g_date_time_get_day_of_year (when) == g_date_time_get_day_of_year (now))
+    return g_date_time_format (when, "%H:%M");
+  if (when_year == now_year)
+    return g_date_time_format (when, "%b %e");
+  return g_date_time_format (when, "%b %e, %Y");
+}
+
+static char *
+format_received (gint64 received_unix)
+{
   g_autoptr (GDateTime) now = g_date_time_new_now_local ();
-  int same_day = (g_date_time_get_year (when) == g_date_time_get_year (now) && g_date_time_get_day_of_year (when) == g_date_time_get_day_of_year (now));
-  return same_day ? g_date_time_format (when, "%H:%M") : g_date_time_format (when, "%b %e");
+  return format_received_at (received_unix, now);
+}
+
+char *
+_mail_message_list_format_received_for_test (gint64 received_unix,
+                                             GDateTime *now)
+{
+  return format_received_at (received_unix, now);
 }
 
 /* --- factory: setup/bind/unbind for recyclable row widgets ----- */

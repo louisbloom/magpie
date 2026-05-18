@@ -34,4 +34,10 @@ GListModel *_mail_message_list_get_model_for_test (MailMessageList *self);
 /* Test-only: borrowed pointer to the internal state GtkStack. */
 GtkStack *_mail_message_list_get_stack_for_test (MailMessageList *self);
 
+/* Test-only: format a received_unix as the message list would, with
+ * the caller-provided @now as the reference for "this year" vs
+ * "older". Returned string is g_free()d by the caller. */
+char *_mail_message_list_format_received_for_test (gint64 received_unix,
+                                                   GDateTime *now);
+
 G_END_DECLS
