@@ -372,17 +372,12 @@ on_messages_done (GObject *src,
   const char *folder_id = g_ptr_array_index (self->folder_remote_ids, self->folder_index);
   const char *folder_dir = g_ptr_array_index (self->folder_dir_names, self->folder_index);
 
-  /* Disk wins over sqlite per the Maildir-is-truth rule: if a third
-   * party (mutt, another magpie instance) renamed files in cur/
-   * since the last pass to add/remove flags, pick those up before we
-   * diff against the remote. The disk pass is cheap (one scandir per
-   * folder + one prepared UPDATE per drifted row) and runs before
-   * anything else looks at messages.unread for this folder. */
-  if (!mail_store_reconcile_folder_from_disk (self->local, folder_id, &error))
-    {
-      finish_pass (self, error);
-      return;
-    }
+  /* The Maildir-is-truth reconcile that used to run here moved to
+   * MailMaildirWatcher: GFileMonitor on each folder's cur/ catches
+   * external flag-renames as they happen, plus an initial reconcile
+   * arms each watcher so drift accumulated while magpie was closed is
+   * resolved before sync even starts. By the time we get here sqlite
+   * already mirrors disk for this folder. */
 
   GHashTable *seen = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
   GHashTable *existing = mail_store_message_remote_ids (self->local, folder_id, &error);
