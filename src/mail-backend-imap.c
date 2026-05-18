@@ -46,8 +46,19 @@ typedef struct
   gboolean use_tls;
   char *username;
   char *selected_mailbox; /* g_strdup'd; tracks libetpan's current SELECT */
+  /* OAuth token cache. Refilled inside acquire_token_locked from a
+   * synchronous GOA call when missing or near expiry. Sharing the
+   * token across many fetches eliminates the per-message DBus hop to
+   * org.gnome.OnlineAccounts that used to dominate fetch latency. */
+  char *cached_token;
+  gint64 cached_token_expires_unix; /* g_get_real_time / G_USEC_PER_SEC */
   GMutex imap_lock;
 } MailBackendIMAP;
+
+/* Refresh the cached token unconditionally if its remaining lifetime
+ * is below this. Gmail's tokens live ~3600s; 60s of slack keeps a
+ * batch from straddling an expiry. */
+#define IMAP_TOKEN_REFRESH_SLACK_SECONDS 60
 
 /* --- destroy ---------------------------------------------------- */
 
@@ -64,6 +75,7 @@ mb_imap_destroy (MailBackend *base)
   g_free (self->host);
   g_free (self->username);
   g_free (self->selected_mailbox);
+  g_free (self->cached_token);
   if (self->goa_object != NULL)
     g_object_unref (self->goa_object);
   if (self->base.response_buf != NULL)
@@ -127,6 +139,43 @@ drop_connection_locked (MailBackendIMAP *self)
       self->imap = NULL;
     }
   g_clear_pointer (&self->selected_mailbox, g_free);
+}
+
+/* Returns a borrowed pointer to the cached token (valid until the
+ * lock is released). Refreshes via a sync DBus call to GOA when the
+ * cache is empty or within the slack window. The token outlives the
+ * function call only as long as the caller holds imap_lock; copy if
+ * you need it after releasing. */
+static const char *
+acquire_token_locked (MailBackendIMAP *self,
+                      GCancellable *cancellable,
+                      GError **error)
+{
+  gint64 now = g_get_real_time () / G_USEC_PER_SEC;
+  if (self->cached_token != NULL && self->cached_token_expires_unix > now + IMAP_TOKEN_REFRESH_SLACK_SECONDS)
+    return self->cached_token;
+
+  g_clear_pointer (&self->cached_token, g_free);
+  self->cached_token_expires_unix = 0;
+
+  gchar *token = NULL;
+  gint expires_in = 0;
+  if (!goa_oauth2_based_call_get_access_token_sync (self->oauth2, &token,
+                                                    &expires_in, cancellable,
+                                                    error))
+    return NULL;
+  self->cached_token = token;
+  self->cached_token_expires_unix = now + expires_in;
+  return self->cached_token;
+}
+
+/* Drop the cached token (used after the server rejects auth so the
+ * next acquire forces a refresh through GOA). */
+static void
+invalidate_token_locked (MailBackendIMAP *self)
+{
+  g_clear_pointer (&self->cached_token, g_free);
+  self->cached_token_expires_unix = 0;
 }
 
 static gboolean
@@ -527,19 +576,199 @@ worker_fetch_message_raw (MailBackendIMAP *self,
   return bytes;
 }
 
-/* --- async glue: token + thread + result ---------------------- */
+/* --- worker: fetch_messages_raw (batched UID FETCH) ---------- */
+
+/* For one folder-group: SELECT, verify UIDVALIDITY, UID FETCH the
+ * whole UID set with BODY.PEEK[], and store the resulting body
+ * GBytes into @out_bodies at the slot indices recorded in
+ * @slot_indices (parallel to @uids). Soft misses (UIDs the server
+ * forgot) leave the slot as NULL. */
+static gboolean
+worker_fetch_messages_in_folder (MailBackendIMAP *self,
+                                 const char *folder_name,
+                                 guint32 expected_uidvalidity,
+                                 const guint32 *uids,
+                                 const gsize *slot_indices,
+                                 gsize n_uids,
+                                 GPtrArray *out_bodies,
+                                 GError **error)
+{
+  if (n_uids == 0)
+    return TRUE;
+
+  if (!select_mailbox_locked (self, folder_name, error))
+    return FALSE;
+  if (self->imap->imap_selection_info == NULL || self->imap->imap_selection_info->sel_uidvalidity != expected_uidvalidity)
+    {
+      g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                           "UIDVALIDITY changed on the server; re-list required");
+      return FALSE;
+    }
+
+  struct mailimap_set *set = mailimap_set_new_empty ();
+  for (gsize i = 0; i < n_uids; i++)
+    mailimap_set_add_single (set, uids[i]);
+  struct mailimap_section *section = mailimap_section_new (NULL); /* whole message */
+  struct mailimap_fetch_att *att = mailimap_fetch_att_new_body_peek_section (section);
+  struct mailimap_fetch_type *ft = mailimap_fetch_type_new_fetch_att (att);
+
+  clist *result = NULL;
+  int rc = mailimap_uid_fetch (self->imap, set, ft, &result);
+  mailimap_set_free (set);
+  mailimap_fetch_type_free (ft);
+  if (!imap_rc_ok (rc))
+    {
+      set_imap_error (error, rc, "UID FETCH (BODY.PEEK[]) batched");
+      if (is_transport_fatal (rc))
+        drop_connection_locked (self);
+      return FALSE;
+    }
+
+  /* Index responses by UID — the server is allowed to interleave
+   * order, and our @slot_indices map UID positions to output slots. */
+  g_autoptr (GHashTable) by_uid = g_hash_table_new_full (g_direct_hash, g_direct_equal,
+                                                         NULL, (GDestroyNotify) g_bytes_unref);
+  for (clistiter *it = clist_begin (result); it != NULL; it = clist_next (it))
+    {
+      struct mailimap_msg_att *att_msg = clist_content (it);
+      if (att_msg == NULL || att_msg->att_list == NULL)
+        continue;
+      guint32 uid = 0;
+      GBytes *body = NULL;
+      for (clistiter *j = clist_begin (att_msg->att_list); j != NULL; j = clist_next (j))
+        {
+          struct mailimap_msg_att_item *item = clist_content (j);
+          if (item == NULL || item->att_type != MAILIMAP_MSG_ATT_ITEM_STATIC)
+            continue;
+          struct mailimap_msg_att_static *s = item->att_data.att_static;
+          if (s == NULL)
+            continue;
+          if (s->att_type == MAILIMAP_MSG_ATT_UID)
+            uid = s->att_data.att_uid;
+          else if (s->att_type == MAILIMAP_MSG_ATT_BODY_SECTION && s->att_data.att_body_section->sec_body_part != NULL)
+            body = g_bytes_new (s->att_data.att_body_section->sec_body_part,
+                                s->att_data.att_body_section->sec_length);
+        }
+      if (uid != 0 && body != NULL)
+        g_hash_table_insert (by_uid, GUINT_TO_POINTER (uid), body);
+      else if (body != NULL)
+        g_bytes_unref (body);
+    }
+  mailimap_fetch_list_free (result);
+
+  /* Place each fetched body into its output slot. Misses stay NULL —
+   * sync's apply_fetch_result treats NULL as a soft skip. */
+  for (gsize i = 0; i < n_uids; i++)
+    {
+      GBytes *body = g_hash_table_lookup (by_uid, GUINT_TO_POINTER (uids[i]));
+      if (body != NULL)
+        {
+          g_ptr_array_index (out_bodies, slot_indices[i]) = g_bytes_ref (body);
+        }
+    }
+  return TRUE;
+}
+
+static GPtrArray *
+worker_fetch_messages_raw (MailBackendIMAP *self,
+                           const char *const *ids,
+                           gsize n_ids,
+                           GError **error)
+{
+  GPtrArray *bodies = g_ptr_array_new_full (n_ids, (GDestroyNotify) g_bytes_unref);
+  g_ptr_array_set_size (bodies, n_ids); /* NULL slots until filled */
+
+  /* Group ids by folder. PHASE_LISTS appends fetches folder-by-
+   * folder, so most batches share a folder; cross-folder splits
+   * cost at most one extra SELECT inside the loop. We process the
+   * groups in order of first appearance. */
+  g_autoptr (GHashTable) groups = g_hash_table_new_full (
+      g_str_hash, g_str_equal,
+      g_free, /* folder name copy owns the key */
+      NULL    /* values are GArrays owned by parallel storage below */
+  );
+  GPtrArray *group_folders = g_ptr_array_new_with_free_func (g_free);
+  GPtrArray *group_uid_arrays = g_ptr_array_new_with_free_func ((GDestroyNotify) g_array_unref);
+  GPtrArray *group_slot_arrays = g_ptr_array_new_with_free_func ((GDestroyNotify) g_array_unref);
+  GArray *group_uidvalidities = g_array_new (FALSE, FALSE, sizeof (guint32));
+
+  gboolean ok = TRUE;
+  for (gsize i = 0; i < n_ids; i++)
+    {
+      guint32 uidvalidity = 0, uid = 0;
+      const char *folder_name = NULL;
+      if (!mail_imap_id_decode (ids[i], &uidvalidity, &uid, &folder_name))
+        {
+          /* Malformed id: leave the slot NULL — apply_fetch_result
+           * surfaces it as a g_warning. The rest of the batch
+           * proceeds. */
+          g_warning ("mail-backend-imap: malformed message id '%s' in batch", ids[i]);
+          continue;
+        }
+
+      gpointer existing_idx = NULL;
+      GArray *uid_arr;
+      GArray *slot_arr;
+      if (g_hash_table_lookup_extended (groups, folder_name, NULL, &existing_idx))
+        {
+          gsize idx = GPOINTER_TO_SIZE (existing_idx) - 1; /* 0 means "absent" */
+          uid_arr = g_ptr_array_index (group_uid_arrays, idx);
+          slot_arr = g_ptr_array_index (group_slot_arrays, idx);
+        }
+      else
+        {
+          char *key_copy = g_strdup (folder_name);
+          g_ptr_array_add (group_folders, key_copy);
+          uid_arr = g_array_new (FALSE, FALSE, sizeof (guint32));
+          slot_arr = g_array_new (FALSE, FALSE, sizeof (gsize));
+          g_ptr_array_add (group_uid_arrays, uid_arr);
+          g_ptr_array_add (group_slot_arrays, slot_arr);
+          g_array_append_val (group_uidvalidities, uidvalidity);
+          g_hash_table_insert (groups, g_strdup (folder_name),
+                               GSIZE_TO_POINTER (group_folders->len));
+        }
+      g_array_append_val (uid_arr, uid);
+      g_array_append_val (slot_arr, i);
+    }
+
+  for (guint g = 0; g < group_folders->len && ok; g++)
+    {
+      const char *folder = g_ptr_array_index (group_folders, g);
+      GArray *uid_arr = g_ptr_array_index (group_uid_arrays, g);
+      GArray *slot_arr = g_ptr_array_index (group_slot_arrays, g);
+      guint32 vu = g_array_index (group_uidvalidities, guint32, g);
+      ok = worker_fetch_messages_in_folder (self, folder, vu,
+                                            (const guint32 *) uid_arr->data,
+                                            (const gsize *) slot_arr->data,
+                                            uid_arr->len, bodies, error);
+    }
+
+  g_ptr_array_unref (group_folders);
+  g_ptr_array_unref (group_uid_arrays);
+  g_ptr_array_unref (group_slot_arrays);
+  g_array_unref (group_uidvalidities);
+
+  if (!ok)
+    {
+      g_ptr_array_unref (bodies);
+      return NULL;
+    }
+  return bodies;
+}
+
+/* --- async glue: thread + result ------------------------------ */
 
 typedef enum
 {
   IMAP_OP_LIST_FOLDERS,
   IMAP_OP_LIST_MESSAGES,
   IMAP_OP_FETCH_RAW,
+  IMAP_OP_FETCH_BATCH,
 } ImapOp;
 
 typedef struct
 {
   ImapOp op;
-  char *access_token;
   /* list_messages */
   char *folder_id;
   int top_n;
@@ -547,6 +776,9 @@ typedef struct
   guint32 fetch_uidvalidity;
   guint32 fetch_uid;
   char *fetch_folder_name;
+  /* fetch_messages_raw (batched) */
+  char **batch_ids; /* g_strdup'd; NULL-terminated array of n_batch ids */
+  gsize n_batch;
 } ImapJob;
 
 static void
@@ -555,10 +787,86 @@ imap_job_free (gpointer p)
   ImapJob *j = p;
   if (j == NULL)
     return;
-  g_free (j->access_token);
   g_free (j->folder_id);
   g_free (j->fetch_folder_name);
+  if (j->batch_ids != NULL)
+    g_strfreev (j->batch_ids);
   g_free (j);
+}
+
+/* Forward decl — the batch worker is defined below the per-message
+ * helpers, but worker_thread dispatches into it. */
+static GPtrArray *worker_fetch_messages_raw (MailBackendIMAP *self,
+                                             const char *const *ids,
+                                             gsize n_ids,
+                                             GError **error);
+
+/* Run an op under the lock, with a one-shot retry if the failure
+ * looks like a stale token: invalidate, drop the connection (so the
+ * next pass re-authenticates), and re-run. Returns whatever the op
+ * returned (typed via the union below). */
+static gboolean
+run_with_auth_retry (MailBackendIMAP *self,
+                     ImapJob *job,
+                     GCancellable *cancellable,
+                     GError **error,
+                     gpointer *out_result /* out, op-specific */)
+{
+  for (int attempt = 0; attempt < 2; attempt++)
+    {
+      g_clear_error (error);
+
+      const char *token = acquire_token_locked (self, cancellable, error);
+      if (token == NULL)
+        return FALSE;
+
+      if (!ensure_connected_locked (self, token, error))
+        {
+          /* Auth-related failure on connect/AUTHENTICATE: drop token
+           * and retry once. Anything else (transport, DNS) is final. */
+          if (attempt == 0 && *error != NULL && g_error_matches (*error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED))
+            {
+              invalidate_token_locked (self);
+              continue;
+            }
+          return FALSE;
+        }
+
+      gpointer result = NULL;
+      switch (job->op)
+        {
+        case IMAP_OP_LIST_FOLDERS:
+          result = worker_list_folders (self, error);
+          break;
+        case IMAP_OP_LIST_MESSAGES:
+          result = worker_list_messages (self, job->folder_id, job->top_n, error);
+          break;
+        case IMAP_OP_FETCH_RAW:
+          result = worker_fetch_message_raw (self, job->fetch_uidvalidity,
+                                             job->fetch_uid,
+                                             job->fetch_folder_name, error);
+          break;
+        case IMAP_OP_FETCH_BATCH:
+          result = worker_fetch_messages_raw (self,
+                                              (const char *const *) job->batch_ids,
+                                              job->n_batch, error);
+          break;
+        }
+
+      if (result != NULL)
+        {
+          *out_result = result;
+          return TRUE;
+        }
+      if (attempt == 0 && *error != NULL && g_error_matches (*error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED))
+        {
+          invalidate_token_locked (self);
+          drop_connection_locked (self);
+          continue;
+        }
+      return FALSE;
+    }
+  return FALSE;
 }
 
 static void
@@ -570,74 +878,31 @@ worker_thread (GTask *task,
   MailBackendIMAP *self = g_task_get_source_tag (task);
   ImapJob *job = task_data;
   GError *error = NULL;
+  gpointer result = NULL;
 
   g_mutex_lock (&self->imap_lock);
+  gboolean ok = run_with_auth_retry (self, job, cancellable, &error, &result);
+  g_mutex_unlock (&self->imap_lock);
 
-  if (!ensure_connected_locked (self, job->access_token, &error))
+  if (!ok)
     {
-      g_mutex_unlock (&self->imap_lock);
       g_task_return_error (task, error);
       return;
     }
 
+  GDestroyNotify free_fn = NULL;
   switch (job->op)
     {
     case IMAP_OP_LIST_FOLDERS:
-      {
-        GPtrArray *folders = worker_list_folders (self, &error);
-        g_mutex_unlock (&self->imap_lock);
-        if (folders == NULL)
-          g_task_return_error (task, error);
-        else
-          g_task_return_pointer (task, folders, (GDestroyNotify) g_ptr_array_unref);
-        return;
-      }
     case IMAP_OP_LIST_MESSAGES:
-      {
-        GPtrArray *messages = worker_list_messages (self, job->folder_id, job->top_n, &error);
-        g_mutex_unlock (&self->imap_lock);
-        if (messages == NULL)
-          g_task_return_error (task, error);
-        else
-          g_task_return_pointer (task, messages, (GDestroyNotify) g_ptr_array_unref);
-        return;
-      }
+    case IMAP_OP_FETCH_BATCH:
+      free_fn = (GDestroyNotify) g_ptr_array_unref;
+      break;
     case IMAP_OP_FETCH_RAW:
-      {
-        GBytes *bytes = worker_fetch_message_raw (self, job->fetch_uidvalidity,
-                                                  job->fetch_uid, job->fetch_folder_name,
-                                                  &error);
-        g_mutex_unlock (&self->imap_lock);
-        if (bytes == NULL)
-          g_task_return_error (task, error);
-        else
-          g_task_return_pointer (task, bytes, (GDestroyNotify) g_bytes_unref);
-        return;
-      }
+      free_fn = (GDestroyNotify) g_bytes_unref;
+      break;
     }
-  g_mutex_unlock (&self->imap_lock);
-  g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_FAILED, "unknown IMAP op");
-}
-
-static void
-on_token_ready (GObject *source, GAsyncResult *result, gpointer user_data)
-{
-  GTask *task = user_data;
-  MailBackendIMAP *self = g_task_get_source_tag (task);
-  ImapJob *job = g_task_get_task_data (task);
-  g_autoptr (GError) error = NULL;
-  gchar *access_token = NULL;
-  gint expires_in = 0;
-  if (!goa_oauth2_based_call_get_access_token_finish (self->oauth2, &access_token,
-                                                      &expires_in, result, &error))
-    {
-      g_task_return_error (task, g_steal_pointer (&error));
-      g_object_unref (task);
-      return;
-    }
-  job->access_token = access_token; /* takes ownership; freed in imap_job_free */
-  g_task_run_in_thread (task, worker_thread);
-  g_object_unref (task);
+  g_task_return_pointer (task, result, free_fn);
 }
 
 static GTask *
@@ -670,8 +935,8 @@ mb_imap_list_folders_async (MailBackend *base,
   ImapJob *job = g_new0 (ImapJob, 1);
   job->op = IMAP_OP_LIST_FOLDERS;
   GTask *task = new_imap_task (self, job, cancellable, callback, user_data);
-  goa_oauth2_based_call_get_access_token (self->oauth2, cancellable,
-                                          on_token_ready, task);
+  g_task_run_in_thread (task, worker_thread);
+  g_object_unref (task);
 }
 
 static GPtrArray *
@@ -700,8 +965,8 @@ mb_imap_list_messages_async (MailBackend *base,
   job->folder_id = g_strdup (folder_id);
   job->top_n = top_n;
   GTask *task = new_imap_task (self, job, cancellable, callback, user_data);
-  goa_oauth2_based_call_get_access_token (self->oauth2, cancellable,
-                                          on_token_ready, task);
+  g_task_run_in_thread (task, worker_thread);
+  g_object_unref (task);
 }
 
 static GPtrArray *
@@ -743,14 +1008,49 @@ mb_imap_fetch_message_raw_async (MailBackend *base,
   job->fetch_uid = uid;
   job->fetch_folder_name = g_strdup (folder_name);
   GTask *task = new_imap_task (self, job, cancellable, callback, user_data);
-  goa_oauth2_based_call_get_access_token (self->oauth2, cancellable,
-                                          on_token_ready, task);
+  g_task_run_in_thread (task, worker_thread);
+  g_object_unref (task);
 }
 
 static GBytes *
 mb_imap_fetch_message_raw_finish (MailBackend *base,
                                   GAsyncResult *result,
                                   GError **error)
+{
+  return g_task_propagate_pointer (G_TASK (result), error);
+}
+
+/* --- vtable: fetch_messages_raw (batched) -------------------- */
+
+static void
+mb_imap_fetch_messages_raw_async (MailBackend *base,
+                                  const char *const *message_ids,
+                                  gsize n_ids,
+                                  GCancellable *cancellable,
+                                  GAsyncReadyCallback callback,
+                                  gpointer user_data)
+{
+  MailBackendIMAP *self = (MailBackendIMAP *) base;
+  /* Same arena rule as the per-message fetch: the UI still holds
+   * MailMessageMeta pointers from the preceding list_messages, so
+   * we must not reset the arena here. */
+  g_byte_array_set_size (self->base.response_buf, 0);
+
+  ImapJob *job = g_new0 (ImapJob, 1);
+  job->op = IMAP_OP_FETCH_BATCH;
+  job->batch_ids = g_new0 (char *, n_ids + 1);
+  for (gsize i = 0; i < n_ids; i++)
+    job->batch_ids[i] = g_strdup (message_ids[i]);
+  job->n_batch = n_ids;
+  GTask *task = new_imap_task (self, job, cancellable, callback, user_data);
+  g_task_run_in_thread (task, worker_thread);
+  g_object_unref (task);
+}
+
+static GPtrArray *
+mb_imap_fetch_messages_raw_finish (MailBackend *base,
+                                   GAsyncResult *result,
+                                   GError **error)
 {
   return g_task_propagate_pointer (G_TASK (result), error);
 }
@@ -764,6 +1064,8 @@ static const MailBackendVTable imap_vt = {
   .list_messages_finish = mb_imap_list_messages_finish,
   .fetch_message_raw_async = mb_imap_fetch_message_raw_async,
   .fetch_message_raw_finish = mb_imap_fetch_message_raw_finish,
+  .fetch_messages_raw_async = mb_imap_fetch_messages_raw_async,
+  .fetch_messages_raw_finish = mb_imap_fetch_messages_raw_finish,
   .destroy = mb_imap_destroy,
 };
 

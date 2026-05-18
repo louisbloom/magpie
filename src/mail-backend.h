@@ -81,6 +81,27 @@ struct _MailBackendVTable
                                        GAsyncResult *result,
                                        GError **error);
 
+  /* Batched body fetch. Optional: backends that leave this slot NULL
+   * still work — the public trampoline falls back to a sequential
+   * chain of fetch_message_raw_async/finish calls. Backends that
+   * implement it can amortise per-message round-trips (IMAP does one
+   * UID FETCH for the whole batch).
+   *
+   * On success, the GPtrArray returned by the finish has the same
+   * length as the input id array. Slot i is either a GBytes for the
+   * message body or NULL if that specific message could not be
+   * fetched (e.g. server forgot the UID between LIST and FETCH).
+   * The GPtrArray's free-func is g_bytes_unref. */
+  void (*fetch_messages_raw_async) (MailBackend *self,
+                                    const char *const *message_ids,
+                                    gsize n_ids,
+                                    GCancellable *cancellable,
+                                    GAsyncReadyCallback callback,
+                                    gpointer user_data);
+  GPtrArray *(*fetch_messages_raw_finish) (MailBackend *self,
+                                           GAsyncResult *result,
+                                           GError **error);
+
   void (*destroy) (MailBackend *self);
 };
 
@@ -121,5 +142,18 @@ void mail_backend_fetch_message_raw_async (MailBackend *self,
 GBytes *mail_backend_fetch_message_raw_finish (MailBackend *self,
                                                GAsyncResult *result,
                                                GError **error);
+
+/* Batched body fetch. If the backend's vtable slot is NULL the
+ * trampoline serialises N fetch_message_raw_async calls and
+ * assembles the parallel array — correct, just not faster. */
+void mail_backend_fetch_messages_raw_async (MailBackend *self,
+                                            const char *const *message_ids,
+                                            gsize n_ids,
+                                            GCancellable *cancellable,
+                                            GAsyncReadyCallback callback,
+                                            gpointer user_data);
+GPtrArray *mail_backend_fetch_messages_raw_finish (MailBackend *self,
+                                                   GAsyncResult *result,
+                                                   GError **error);
 
 G_END_DECLS

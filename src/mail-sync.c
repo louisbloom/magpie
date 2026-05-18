@@ -131,12 +131,21 @@ G_DEFINE_FINAL_TYPE (MailSync, mail_sync, G_TYPE_OBJECT)
 
 static void start_folders (MailSync *self);
 static void start_next_list (MailSync *self);
-static void start_next_fetch (MailSync *self);
+static void start_next_batch (MailSync *self);
 static void finish_pass (MailSync *self, GError *error /* takes ownership */);
 
 static void on_folders_done (GObject *src, GAsyncResult *res, gpointer user_data);
 static void on_messages_done (GObject *src, GAsyncResult *res, gpointer user_data);
-static void on_fetch_done (GObject *src, GAsyncResult *res, gpointer user_data);
+static void on_batch_done (GObject *src, GAsyncResult *res, gpointer user_data);
+
+/* PHASE_FETCH chunk size. One server round-trip per batch on
+ * backends that implement the batched vtable (IMAP); the sequential
+ * fallback still works for backends without it. Tuned for two
+ * priorities: amortise GOA + TCP overhead (favours larger batches),
+ * and keep progress/ETA feeling live + cancellation responsive
+ * (favours smaller). 50 is the empirical knee for typical Gmail
+ * inboxes. */
+#define MAIL_SYNC_FETCH_BATCH 50
 
 /* --- progress / status setters ----------------------------------- */
 
@@ -506,52 +515,37 @@ on_messages_done (GObject *src,
     }
   self->phase = PHASE_FETCH;
   self->fetch_index = 0;
-  start_next_fetch (self);
+  start_next_batch (self);
 }
 
-/* --- phase 3: fetch_message_raw per new id ----------------------- */
+/* --- phase 3: batched fetch_messages_raw -------------------------- */
 
-static void
-start_next_fetch (MailSync *self)
+/* Persist one body that came back from a batch. Returns FALSE and
+ * sets *error on failure; the caller surfaces it. NULL @bytes is a
+ * soft miss (server forgot the UID between LIST and FETCH); log a
+ * warning and skip without aborting the pass — the next sync will
+ * either re-discover or determine the message is genuinely gone. */
+static gboolean
+apply_fetch_result (MailSync *self,
+                    FetchItem *it,
+                    GBytes *bytes,
+                    GError **error)
 {
-  const guint k = self->fetch_index + 1;
-  const guint n = self->pending_fetches->len;
-  set_status (self, g_strdup_printf ("Downloading messages (%u / %u)…", k, n));
-
-  FetchItem *it = g_ptr_array_index (self->pending_fetches, self->fetch_index);
-  mail_backend_fetch_message_raw_async (self->remote, it->message_remote_id,
-                                        self->cancellable, on_fetch_done, self);
-}
-
-static void
-on_fetch_done (GObject *src,
-               GAsyncResult *res,
-               gpointer user_data)
-{
-  MailSync *self = user_data;
-  GError *error = NULL;
-  g_autoptr (GBytes) bytes = mail_backend_fetch_message_raw_finish (self->remote, res, &error);
   if (bytes == NULL)
     {
-      finish_pass (self, error);
-      return;
+      g_warning ("mail-sync: server returned no body for %s (in %s); skipping",
+                 it->message_remote_id, it->folder_remote_id);
+      return TRUE;
     }
 
-  FetchItem *it = g_ptr_array_index (self->pending_fetches, self->fetch_index);
   g_autofree char *filename = NULL;
   if (!mail_store_write_raw (self->local, it->folder_dir_name, bytes, !it->unread,
-                             &filename, &error))
-    {
-      finish_pass (self, error);
-      return;
-    }
+                             &filename, error))
+    return FALSE;
   if (!mail_store_upsert_message (self->local, it->folder_remote_id, it->message_remote_id,
                                   it->content_key, filename, it->subject, it->from_addr,
-                                  it->received_unix, it->unread, NULL, &error))
-    {
-      finish_pass (self, error);
-      return;
-    }
+                                  it->received_unix, it->unread, NULL, error))
+    return FALSE;
 
   /* For each same-pass alias of this message: hardlink the freshly
    * written body into the alias's folder and upsert its row. The
@@ -566,29 +560,76 @@ on_fetch_done (GObject *src,
           g_autofree char *alias_filename = NULL;
           if (!mail_store_link_raw (self->local, it->folder_dir_name, filename,
                                     a->folder_dir_name, !a->unread,
-                                    &alias_filename, &error))
-            {
-              finish_pass (self, error);
-              return;
-            }
+                                    &alias_filename, error))
+            return FALSE;
           if (!mail_store_upsert_message (self->local, a->folder_remote_id,
                                           a->message_remote_id, it->content_key,
                                           alias_filename, a->subject, a->from_addr,
-                                          a->received_unix, a->unread, NULL, &error))
-            {
-              finish_pass (self, error);
-              return;
-            }
+                                          a->received_unix, a->unread, NULL, error))
+            return FALSE;
+        }
+    }
+  return TRUE;
+}
+
+static void
+start_next_batch (MailSync *self)
+{
+  const guint n = self->pending_fetches->len;
+  guint take = n - self->fetch_index;
+  if (take > MAIL_SYNC_FETCH_BATCH)
+    take = MAIL_SYNC_FETCH_BATCH;
+
+  set_status (self, g_strdup_printf ("Downloading messages (%u / %u)…",
+                                     self->fetch_index + take, n));
+
+  /* Pack the batch's remote_ids into a borrowed const-char-pointer
+   * array. FetchItem owns the underlying strings; they live as long
+   * as pending_fetches, which outlives the in-flight async call. */
+  const char **ids = g_new (const char *, take);
+  for (guint i = 0; i < take; i++)
+    {
+      FetchItem *it = g_ptr_array_index (self->pending_fetches, self->fetch_index + i);
+      ids[i] = it->message_remote_id;
+    }
+  mail_backend_fetch_messages_raw_async (self->remote, ids, take,
+                                         self->cancellable, on_batch_done, self);
+  g_free (ids);
+}
+
+static void
+on_batch_done (GObject *src,
+               GAsyncResult *res,
+               gpointer user_data)
+{
+  MailSync *self = user_data;
+  GError *error = NULL;
+  g_autoptr (GPtrArray) bodies = mail_backend_fetch_messages_raw_finish (self->remote,
+                                                                         res, &error);
+  if (bodies == NULL)
+    {
+      finish_pass (self, error);
+      return;
+    }
+
+  for (guint i = 0; i < bodies->len; i++)
+    {
+      FetchItem *it = g_ptr_array_index (self->pending_fetches, self->fetch_index + i);
+      GBytes *body = g_ptr_array_index (bodies, i);
+      if (!apply_fetch_result (self, it, body, &error))
+        {
+          finish_pass (self, error);
+          return;
         }
     }
 
-  self->fetch_index++;
+  self->fetch_index += bodies->len;
   const guint n = self->pending_fetches->len;
   set_progress (self, 0.20 + 0.80 * ((double) self->fetch_index / (double) n));
 
   if (self->fetch_index < n)
     {
-      start_next_fetch (self);
+      start_next_batch (self);
       return;
     }
   set_status (self, g_strdup ("Up to date."));

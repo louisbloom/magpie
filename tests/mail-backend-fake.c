@@ -49,6 +49,7 @@ typedef struct
   guint list_folders_calls;
   guint list_messages_calls;
   guint fetch_raw_calls;
+  guint fetch_messages_raw_calls;
   char *last_folder_id;
   char *last_message_id;
 } MailBackendFake;
@@ -330,6 +331,77 @@ mb_fake_fetch_message_raw_finish (MailBackend *base,
   return g_bytes_new_take (raw, len);
 }
 
+/* --- vtable: fetch_messages_raw (batched) ---------------------- */
+
+typedef struct
+{
+  GTask *task;
+  GPtrArray *bodies; /* of GBytes*, parallel to input ids; NULL slots ok */
+} IdleFetchBatch;
+
+static gboolean
+idle_complete_fetch_batch (gpointer p)
+{
+  IdleFetchBatch *ctx = p;
+  if (g_task_return_error_if_cancelled (ctx->task))
+    g_ptr_array_unref (ctx->bodies);
+  else
+    g_task_return_pointer (ctx->task, ctx->bodies, (GDestroyNotify) g_ptr_array_unref);
+  g_object_unref (ctx->task);
+  g_free (ctx);
+  return G_SOURCE_REMOVE;
+}
+
+static void
+mb_fake_fetch_messages_raw_async (MailBackend *base,
+                                  const char *const *message_ids,
+                                  gsize n_ids,
+                                  GCancellable *cancellable,
+                                  GAsyncReadyCallback callback,
+                                  gpointer user_data)
+{
+  MailBackendFake *self = (MailBackendFake *) base;
+  self->fetch_messages_raw_calls++;
+
+  /* Build the result array eagerly — same fake semantics as the
+   * per-message path, just collected. Each lookup tracks the
+   * per-message call counter so callers can distinguish "sync used
+   * the batched API" from "sync used the fallback that loops the
+   * per-message API". */
+  GPtrArray *bodies = g_ptr_array_new_full (n_ids, (GDestroyNotify) g_bytes_unref);
+  for (gsize i = 0; i < n_ids; i++)
+    {
+      GBytes *body = NULL;
+      for (guint f = 0; f < self->folder_messages->len && body == NULL; f++)
+        {
+          FakeFolderMessages *fm = &g_array_index (self->folder_messages, FakeFolderMessages, f);
+          for (guint j = 0; j < fm->messages->len; j++)
+            {
+              FakeMessageStored *m = &g_array_index (fm->messages, FakeMessageStored, j);
+              if (g_strcmp0 (m->id, message_ids[i]) == 0 && m->raw_rfc822 != NULL)
+                {
+                  body = g_bytes_new (m->raw_rfc822, strlen (m->raw_rfc822));
+                  break;
+                }
+            }
+        }
+      g_ptr_array_add (bodies, body); /* NULL on miss; matches contract */
+    }
+
+  IdleFetchBatch *ctx = g_new (IdleFetchBatch, 1);
+  ctx->task = g_task_new (NULL, cancellable, callback, user_data);
+  ctx->bodies = bodies;
+  g_idle_add (idle_complete_fetch_batch, ctx);
+}
+
+static GPtrArray *
+mb_fake_fetch_messages_raw_finish (MailBackend *base,
+                                   GAsyncResult *result,
+                                   GError **error)
+{
+  return g_task_propagate_pointer (G_TASK (result), error);
+}
+
 /* --- destroy ---------------------------------------------------- */
 
 static void
@@ -357,6 +429,8 @@ static const MailBackendVTable fake_vt = {
   .list_messages_finish = mb_fake_list_messages_finish,
   .fetch_message_raw_async = mb_fake_fetch_message_raw_async,
   .fetch_message_raw_finish = mb_fake_fetch_message_raw_finish,
+  .fetch_messages_raw_async = mb_fake_fetch_messages_raw_async,
+  .fetch_messages_raw_finish = mb_fake_fetch_messages_raw_finish,
   .destroy = mb_fake_destroy,
 };
 
@@ -435,6 +509,12 @@ guint
 mail_backend_fake_fetch_raw_calls (MailBackend *backend)
 {
   return ((MailBackendFake *) backend)->fetch_raw_calls;
+}
+
+guint
+mail_backend_fake_fetch_messages_raw_calls (MailBackend *backend)
+{
+  return ((MailBackendFake *) backend)->fetch_messages_raw_calls;
 }
 
 const char *

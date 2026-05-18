@@ -184,13 +184,19 @@ test_second_pass_is_noop (void)
   MailSync *sync = mail_sync_new ();
 
   run_to_completion (sync, remote, local, NULL);
-  guint fetch_calls_after_first = mail_backend_fake_fetch_raw_calls (remote);
-  g_assert_cmpuint (fetch_calls_after_first, ==, 4); /* 3 inbox + 1 sent */
+  /* The four new bodies (3 inbox + 1 sent) arrive across at most two
+   * batched calls — one per folder; the batch size is way above 4.
+   * Test the body-count side of the contract: zero per-message
+   * fallback calls + at least one batched call. */
+  guint fallback_after_first = mail_backend_fake_fetch_raw_calls (remote);
+  guint batched_after_first = mail_backend_fake_fetch_messages_raw_calls (remote);
+  g_assert_cmpuint (fallback_after_first, ==, 0);
+  g_assert_cmpuint (batched_after_first, >=, 1);
 
   /* Re-run with the same fake; nothing new on the remote. */
   run_to_completion (sync, remote, local, NULL);
-  guint fetch_calls_after_second = mail_backend_fake_fetch_raw_calls (remote);
-  g_assert_cmpuint (fetch_calls_after_second, ==, 4); /* no new fetches */
+  g_assert_cmpuint (mail_backend_fake_fetch_raw_calls (remote), ==, fallback_after_first);
+  g_assert_cmpuint (mail_backend_fake_fetch_messages_raw_calls (remote), ==, batched_after_first);
 
   g_object_unref (sync);
   mail_backend_destroy (remote);
@@ -410,7 +416,7 @@ test_dedup_by_content_key (void)
   /* Two folders ("INBOX" and "All Mail") each list the same Gmail
    * message — same content_key, different per-folder remote_ids. The
    * sync engine must:
-   *   - Fetch the body once (fetch_raw_calls == 1).
+   *   - Fetch the body once (exactly one batched call carrying one id).
    *   - Upsert two message rows (one per folder).
    *   - Hardlink the bodies so both Maildir entries share an inode. */
   g_autoptr (GError) error = NULL;
@@ -440,7 +446,8 @@ test_dedup_by_content_key (void)
   run_to_completion (sync, remote, local, NULL);
 
   /* Only one network fetch happened. */
-  g_assert_cmpuint (mail_backend_fake_fetch_raw_calls (remote), ==, 1);
+  g_assert_cmpuint (mail_backend_fake_fetch_raw_calls (remote), ==, 0);
+  g_assert_cmpuint (mail_backend_fake_fetch_messages_raw_calls (remote), ==, 1);
 
   /* Both folders have their message row. */
   GHashTable *ibo = mail_store_message_remote_ids (local, "f-inbox", &error);
@@ -494,7 +501,8 @@ test_dedup_across_passes (void)
 
   MailSync *sync = mail_sync_new ();
   run_to_completion (sync, remote, local, NULL);
-  g_assert_cmpuint (mail_backend_fake_fetch_raw_calls (remote), ==, 1);
+  g_assert_cmpuint (mail_backend_fake_fetch_raw_calls (remote), ==, 0);
+  g_assert_cmpuint (mail_backend_fake_fetch_messages_raw_calls (remote), ==, 1);
 
   /* Pass 2 — "All Mail" appears with the same content_key. */
   FakeFolderSpec two_folders[] = {
@@ -511,7 +519,8 @@ test_dedup_across_passes (void)
   run_to_completion (sync, remote, local, NULL);
 
   /* Still exactly 1 body fetch from the remote across both passes. */
-  g_assert_cmpuint (mail_backend_fake_fetch_raw_calls (remote), ==, 1);
+  g_assert_cmpuint (mail_backend_fake_fetch_raw_calls (remote), ==, 0);
+  g_assert_cmpuint (mail_backend_fake_fetch_messages_raw_calls (remote), ==, 1);
 
   /* And All Mail's message row exists locally. */
   GHashTable *aml = mail_store_message_remote_ids (local, "f-all", &error);
@@ -521,6 +530,195 @@ test_dedup_across_passes (void)
 
   g_object_unref (sync);
   mail_backend_destroy (remote);
+  mail_store_close (local);
+  rm_rf (root);
+}
+
+/* --- batched fetch -------------------------------------------- */
+
+static void
+test_fetch_uses_batched_when_available (void)
+{
+  /* Seed 100 messages in INBOX. The fake's vtable supplies a
+   * batched fetch path; sync should land all bodies via that path
+   * and never call the per-message path. With MAIL_SYNC_FETCH_BATCH
+   * = 50, the expected batched-call count is 2. */
+  g_autoptr (GError) error = NULL;
+  g_autofree char *root = g_dir_make_tmp ("mail-sync-batch-XXXXXX", &error);
+  g_assert_no_error (error);
+  MailStore *local = mail_store_open (root, "u@example.com", &error);
+  g_assert_no_error (error);
+
+  MailBackend *remote = mail_backend_fake_new ();
+  FakeFolderSpec folders[] = { { "f-inbox", "Inbox", NULL, 0, 100 } };
+  mail_backend_fake_set_folders (remote, folders, G_N_ELEMENTS (folders));
+
+  enum
+  {
+    N = 100
+  };
+  FakeMessageSpec msgs[N];
+  char *id_storage[N];
+  char *body_storage[N];
+  for (guint i = 0; i < N; i++)
+    {
+      id_storage[i] = g_strdup_printf ("m%03u", i);
+      body_storage[i] = g_strdup_printf ("Body %u\r\n", i);
+      msgs[i] = (FakeMessageSpec){
+        .id = id_storage[i],
+        .subject = "S",
+        .from = "a@b",
+        .received_unix = 1700000000 + i,
+        .unread = FALSE,
+        .raw_rfc822 = body_storage[i],
+        .content_key = NULL,
+      };
+    }
+  mail_backend_fake_set_messages (remote, "f-inbox", msgs, N);
+
+  MailSync *sync = mail_sync_new ();
+  run_to_completion (sync, remote, local, NULL);
+
+  g_assert_cmpuint (mail_backend_fake_fetch_raw_calls (remote), ==, 0);
+  g_assert_cmpuint (mail_backend_fake_fetch_messages_raw_calls (remote), ==, 2);
+
+  GHashTable *ids = mail_store_message_remote_ids (local, "f-inbox", &error);
+  g_assert_cmpuint (g_hash_table_size (ids), ==, N);
+  g_hash_table_unref (ids);
+
+  for (guint i = 0; i < N; i++)
+    {
+      g_free (id_storage[i]);
+      g_free (body_storage[i]);
+    }
+  g_object_unref (sync);
+  mail_backend_destroy (remote);
+  mail_store_close (local);
+  rm_rf (root);
+}
+
+/* --- fallback when no batched vt ------------------------------ */
+
+/* A thin wrapper that forwards every vtable slot to an inner
+ * MailBackend *except* fetch_messages_raw_async/finish, which it
+ * deliberately leaves NULL. Used to verify the public trampoline
+ * in mail-backend.c falls back to looping the per-message path —
+ * the route mail-backend-msgraph uses today. */
+typedef struct
+{
+  MailBackend base;
+  MailBackend *inner;
+} FetchOnlyBackend;
+
+static void
+fb_list_folders_async (MailBackend *b, GCancellable *c, GAsyncReadyCallback cb, gpointer u)
+{
+  mail_backend_list_folders_async (((FetchOnlyBackend *) b)->inner, c, cb, u);
+}
+static GPtrArray *
+fb_list_folders_finish (MailBackend *b, GAsyncResult *r, GError **e)
+{
+  return mail_backend_list_folders_finish (((FetchOnlyBackend *) b)->inner, r, e);
+}
+static void
+fb_list_messages_async (MailBackend *b, const char *fid, int n, GCancellable *c, GAsyncReadyCallback cb, gpointer u)
+{
+  mail_backend_list_messages_async (((FetchOnlyBackend *) b)->inner, fid, n, c, cb, u);
+}
+static GPtrArray *
+fb_list_messages_finish (MailBackend *b, GAsyncResult *r, GError **e)
+{
+  return mail_backend_list_messages_finish (((FetchOnlyBackend *) b)->inner, r, e);
+}
+static void
+fb_fetch_raw_async (MailBackend *b, const char *id, GCancellable *c, GAsyncReadyCallback cb, gpointer u)
+{
+  mail_backend_fetch_message_raw_async (((FetchOnlyBackend *) b)->inner, id, c, cb, u);
+}
+static GBytes *
+fb_fetch_raw_finish (MailBackend *b, GAsyncResult *r, GError **e)
+{
+  return mail_backend_fetch_message_raw_finish (((FetchOnlyBackend *) b)->inner, r, e);
+}
+static void
+fb_destroy (MailBackend *b)
+{
+  FetchOnlyBackend *self = (FetchOnlyBackend *) b;
+  /* inner is freed by the test, not us. */
+  if (self->base.response_buf != NULL)
+    g_byte_array_unref (self->base.response_buf);
+  if (self->base.path_buf != NULL)
+    g_string_free (self->base.path_buf, TRUE);
+  mail_arena_destroy (&self->base.fetch_arena);
+  g_free (self);
+}
+static const MailBackendVTable fetch_only_vt = {
+  .list_folders_async = fb_list_folders_async,
+  .list_folders_finish = fb_list_folders_finish,
+  .list_messages_async = fb_list_messages_async,
+  .list_messages_finish = fb_list_messages_finish,
+  .fetch_message_raw_async = fb_fetch_raw_async,
+  .fetch_message_raw_finish = fb_fetch_raw_finish,
+  /* fetch_messages_raw_{async,finish} deliberately NULL */
+  .destroy = fb_destroy,
+};
+
+static MailBackend *
+fetch_only_backend_new (MailBackend *inner)
+{
+  FetchOnlyBackend *self = g_new0 (FetchOnlyBackend, 1);
+  self->base.vt = &fetch_only_vt;
+  mail_arena_init (&self->base.fetch_arena, 1024);
+  self->base.response_buf = g_byte_array_new ();
+  self->base.path_buf = g_string_sized_new (64);
+  self->inner = inner;
+  return (MailBackend *) self;
+}
+
+static void
+test_fallback_when_no_batched_vt (void)
+{
+  /* Sync against a backend missing the batched slot. The public
+   * trampoline must serialise N per-message calls and assemble the
+   * parallel array correctly — same end-state in the store. */
+  g_autoptr (GError) error = NULL;
+  g_autofree char *root = g_dir_make_tmp ("mail-sync-fallback-XXXXXX", &error);
+  g_assert_no_error (error);
+  MailStore *local = mail_store_open (root, "u@example.com", &error);
+
+  MailBackend *fake = mail_backend_fake_new ();
+  FakeFolderSpec folders[] = { { "f-inbox", "Inbox", NULL, 0, 10 } };
+  FakeMessageSpec msgs[10];
+  char *ids[10];
+  char *bodies[10];
+  for (guint i = 0; i < 10; i++)
+    {
+      ids[i] = g_strdup_printf ("x%u", i);
+      bodies[i] = g_strdup_printf ("body %u", i);
+      msgs[i] = (FakeMessageSpec){ .id = ids[i], .subject = "s", .from = "a@b", .received_unix = 1700000000 + i, .unread = FALSE, .raw_rfc822 = bodies[i] };
+    }
+  mail_backend_fake_set_folders (fake, folders, G_N_ELEMENTS (folders));
+  mail_backend_fake_set_messages (fake, "f-inbox", msgs, 10);
+
+  MailBackend *wrapped = fetch_only_backend_new (fake);
+  MailSync *sync = mail_sync_new ();
+  run_to_completion (sync, wrapped, local, NULL);
+
+  g_assert_cmpuint (mail_backend_fake_fetch_raw_calls (fake), ==, 10);
+  g_assert_cmpuint (mail_backend_fake_fetch_messages_raw_calls (fake), ==, 0);
+
+  GHashTable *store_ids = mail_store_message_remote_ids (local, "f-inbox", &error);
+  g_assert_cmpuint (g_hash_table_size (store_ids), ==, 10);
+  g_hash_table_unref (store_ids);
+
+  for (guint i = 0; i < 10; i++)
+    {
+      g_free (ids[i]);
+      g_free (bodies[i]);
+    }
+  g_object_unref (sync);
+  mail_backend_destroy (wrapped);
+  mail_backend_destroy (fake);
   mail_store_close (local);
   rm_rf (root);
 }
@@ -539,5 +737,7 @@ main (int argc,
   g_test_add_func ("/mail-sync/cancel-sets-terminal-status", test_cancel_sets_terminal_status);
   g_test_add_func ("/mail-sync/dedup-by-content-key", test_dedup_by_content_key);
   g_test_add_func ("/mail-sync/dedup-across-passes", test_dedup_across_passes);
+  g_test_add_func ("/mail-sync/fetch-uses-batched", test_fetch_uses_batched_when_available);
+  g_test_add_func ("/mail-sync/fallback-when-no-batched-vt", test_fallback_when_no_batched_vt);
   return g_test_run ();
 }

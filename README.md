@@ -123,7 +123,10 @@ Early prototype. The current shape:
   with cross-folder body deduplication keyed on the RFC 5322
   `Message-ID` header — a message in INBOX and `[Gmail]/All Mail`
   is fetched once and the Maildir bodies hardlink-share an inode.
-  Selection is per-account via
+  Fetches are batched (one `UID FETCH BODY.PEEK[]` per ~50 messages)
+  and the GOA OAuth token is cached across the pass, so an
+  initial-sync's per-message round-trip cost amortises into a
+  near-constant overhead. Selection is per-account via
   GOA's reported provider type.
 - **Tests.** Thirteen test binaries under `tests/`, running under
   `gtk_test_init` where they touch widgets: `test-arena`,

@@ -55,6 +55,7 @@ void mail_backend_fake_set_messages (MailBackend *backend,
 guint mail_backend_fake_list_folders_calls (MailBackend *backend);
 guint mail_backend_fake_list_messages_calls (MailBackend *backend);
 guint mail_backend_fake_fetch_raw_calls (MailBackend *backend);
+guint mail_backend_fake_fetch_messages_raw_calls (MailBackend *backend);
 
 /* Pointers borrowed; valid until the backend is destroyed. */
 const char *mail_backend_fake_last_folder_id (MailBackend *backend);
