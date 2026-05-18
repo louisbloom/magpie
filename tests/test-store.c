@@ -249,7 +249,11 @@ test_write_then_read_raw_roundtrip (Fixture *f,
   g_assert_true (mail_store_write_raw (f->store, "INBOX", in, TRUE, &filename, &error));
   g_assert_no_error (error);
   g_assert_nonnull (filename);
-  /* File should be in cur/ with :2,S suffix because seen=TRUE. */
+  /* File should be in cur/ with :2,S suffix because seen=TRUE. The
+   * `:2,` info marker is required by the Maildir spec for every
+   * cur/ entry — present even when no flags are set (seen=FALSE).
+   * The seen=FALSE pin lives in test_set_message_unread_renames_and
+   * _updates. */
   g_assert_true (g_str_has_suffix (filename, ":2,S"));
   g_autofree char *p = g_build_filename (f->root, "INBOX", "cur", filename, NULL);
   g_assert_true (g_file_test (p, G_FILE_TEST_EXISTS));
@@ -464,8 +468,8 @@ test_reconcile_folder_from_disk (Fixture *f,
   g_assert_true (mail_store_upsert_folder (f->store, "rid-INBOX", "INBOX", NULL, 0, 0,
                                            NULL, &error));
 
-  /* Write an unread file (no info suffix in our convention) and
-   * upsert a matching row that agrees: unread=TRUE, filename=basename. */
+  /* Write an unread file (no `S` in its info suffix) and upsert a
+   * matching row that agrees: unread=TRUE, filename=basename. */
   const char *payload = "Subject: hi\r\n\r\nbody\r\n";
   g_autoptr (GBytes) in = g_bytes_new_static (payload, strlen (payload));
   g_autofree char *name = NULL;
@@ -477,8 +481,10 @@ test_reconcile_folder_from_disk (Fixture *f,
 
   /* Pretend mutt opened the message and marked it read: rename the
    * on-disk file to add :2,S, then run the reconciler. Sqlite must
-   * reflect both the new filename and unread=FALSE. */
-  g_autofree char *seen_name = g_strconcat (name, ":2,S", NULL);
+   * reflect both the new filename and unread=FALSE. The basename
+   * helper builds the correct flagged form whether or not the
+   * source already has a `:2,` marker. */
+  g_autofree char *seen_name = _mail_store_maildir_basename_add_flag_for_test (name, 'S');
   g_autofree char *old_path = g_build_filename (f->root, "INBOX", "cur", name, NULL);
   g_autofree char *new_path = g_build_filename (f->root, "INBOX", "cur", seen_name, NULL);
   g_assert_cmpint (g_rename (old_path, new_path), ==, 0);
@@ -628,8 +634,10 @@ test_set_message_unread_renames_and_updates (Fixture *f,
   g_autofree char *write_name = NULL;
   g_assert_true (mail_store_write_raw (f->store, "INBOX", in, FALSE, &write_name, &error));
   g_assert_no_error (error);
-  /* seen=FALSE → bare basename, no :2,S. */
+  /* seen=FALSE → no `S` in the info suffix (basename still ends
+   * with `:2,` to satisfy the Maildir cur/ spec). */
   g_assert_false (g_str_has_suffix (write_name, ":2,S"));
+  g_assert_true (g_str_has_suffix (write_name, ":2,"));
 
   g_assert_true (mail_store_upsert_message (f->store, "rid-INBOX", "msg-1", NULL, write_name,
                                             "hi", "a@example.com", 1700000000, TRUE,

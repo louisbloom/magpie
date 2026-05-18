@@ -1233,9 +1233,16 @@ maildir_filename (MailStore *self,
   gint usec = g_date_time_get_microsecond (now);
   g_date_time_unref (now);
   guint64 counter = ++self->filename_counter;
-  return g_strdup_printf ("%" G_GINT64_FORMAT ".M%dP%dQ%" G_GUINT64_FORMAT ".%s%s",
+  /* Per the Maildir spec, every entry in cur/ has the `:2,FLAGS`
+   * info suffix; for unread mail FLAGS is empty (just `:2,`). Older
+   * Magpie deliveries omitted the marker entirely for unread; mutt
+   * tolerated it but stricter Maildir readers (notmuch, some MUAs)
+   * don't, so we now always emit the marker. The reconciler matches
+   * by the unique prefix before `:2,`, so existing pre-marker rows
+   * keep matching their on-disk files until the next mark-read. */
+  return g_strdup_printf ("%" G_GINT64_FORMAT ".M%dP%dQ%" G_GUINT64_FORMAT ".%s:2,%s",
                           secs, usec, (int) getpid (), counter,
-                          self->hostname, seen ? ":2,S" : "");
+                          self->hostname, seen ? "S" : "");
 }
 
 gboolean
