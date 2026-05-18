@@ -44,8 +44,27 @@ magpie_SOURCES = \
     mail-backend-imap.h \
     mail-resources.c
 
-BUILT_SOURCES = mail-resources.c
-CLEANFILES    = mail-resources.c
+BUILT_SOURCES = magpie-version.h mail-resources.c
+CLEANFILES    = magpie-version.h mail-resources.c
+
+# Regenerate magpie-version.h on every `make` so the embedded version string
+# tracks the current git HEAD (and grows a -dirty suffix when the tree has
+# uncommitted changes). The recipe always runs, but the file is only
+# rewritten when the version actually changes — so dependent .o files stay
+# cached when nothing changed.
+.PHONY: magpie_version_force
+magpie-version.h: magpie_version_force
+	@v=`"$(top_srcdir)/build-aux/git-version.sh" "$(top_srcdir)" 2>/dev/null`; \
+	test -n "$$v" || v="$(MAGPIE_VERSION)"; \
+	test -n "$$v" || v="unknown"; \
+	printf '#ifndef MAGPIE_VERSION_H\n#define MAGPIE_VERSION_H\n#define MAGPIE_VERSION "%s"\n#endif\n' "$$v" > $@.tmp; \
+	if cmp -s $@.tmp $@ 2>/dev/null; then \
+	  rm -f $@.tmp; \
+	else \
+	  mv $@.tmp $@; \
+	  echo "  GEN      $@ ($$v)"; \
+	fi
+magpie_version_force:
 
 GRESOURCE_XML  = $(top_srcdir)/data/org.gnome.Magpie.gresource.xml
 GRESOURCE_DEPS = \

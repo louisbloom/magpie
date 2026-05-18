@@ -65,7 +65,11 @@ AC_CHECK_LIB([etpan], [mailimap_new], [LIBETPAN_LIBS="-letpan"],
              [AC_MSG_ERROR([libetpan does not export mailimap_new (install libetpan-devel).])])
 AC_SUBST([LIBETPAN_LIBS])
 
-AC_DEFINE_UNQUOTED([MAGPIE_VERSION], ["$MAGPIE_VERSION"], [Version string])
+dnl MAGPIE_VERSION is intentionally NOT defined in config.h. src/Makefile.am
+dnl regenerates src/magpie-version.h on every `make` so the value tracks the
+dnl current git HEAD without re-running configure. The MAGPIE_VERSION shell
+dnl variable above is still AC_SUBST'd so the Makefile rule has a fallback
+dnl when build-aux/git-version.sh returns nothing (tarball builds, etc.).
 AC_DEFINE([MAGPIE_APP_ID], ["org.gnome.Magpie"], [Application id])
 AC_DEFINE([GOA_API_IS_SUBJECT_TO_CHANGE], [1], [Acknowledge libgoa's unstable API])
 
