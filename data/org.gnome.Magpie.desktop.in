@@ -7,5 +7,6 @@ Icon=org.gnome.Magpie
 Terminal=false
 Type=Application
 StartupNotify=true
+StartupWMClass=org.gnome.Magpie
 Categories=GNOME;GTK;Network;Email;
 Keywords=Mail;Email;Inbox;
