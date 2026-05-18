@@ -2,6 +2,7 @@
 
 #include "config.h"
 
+#include "magpie-version.h"
 #include "mail-application.h"
 
 #include <adwaita.h>
@@ -123,6 +124,16 @@ int
 main (int argc,
       char *argv[])
 {
+  /* Handle --version before constructing the application so we don't
+   * spin up GTK / GOA / a D-Bus name just to print a string. */
+  for (int i = 1; i < argc; i++)
+    {
+      if (g_strcmp0 (argv[i], "--version") == 0)
+        {
+          g_print ("magpie %s\n", MAGPIE_VERSION);
+          return 0;
+        }
+    }
 #ifdef DEBUG
   g_log_set_writer_func (debug_break_on_gizmo_warning, NULL, NULL);
 #endif
