@@ -45,6 +45,12 @@ void mail_account_page_set_state (MailAccountPage *self,
  *         account (the page itself does not own the cancellable or
  *         touch the sync engine). */
 
+/* Borrowed pointer to the start-of-header sidebar-toggle button.
+ * The window binds its `active` property to the parent split view's
+ * `show-sidebar` so the page can collapse/uncollapse the sidebar
+ * just like the message-list and message-view pages. */
+GtkToggleButton *mail_account_page_get_sidebar_toggle (MailAccountPage *self);
+
 /* Test-only accessors for the rendering invariants the unit tests pin. */
 gboolean _mail_account_page_is_cancel_visible_for_test (MailAccountPage *self);
 gboolean _mail_account_page_is_sync_button_visible_for_test (MailAccountPage *self);

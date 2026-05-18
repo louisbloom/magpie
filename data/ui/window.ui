@@ -91,6 +91,12 @@
                       <object class="AdwToolbarView">
                         <child type="top">
                           <object class="AdwHeaderBar">
+                            <child type="start">
+                              <object class="GtkToggleButton" id="message_view_sidebar_toggle">
+                                <property name="icon-name">sidebar-show-symbolic</property>
+                                <property name="tooltip-text" translatable="yes">Toggle sidebar</property>
+                              </object>
+                            </child>
                             <child type="end">
                               <object class="AdwToggleGroup" id="view_mode_group">
                                 <style>

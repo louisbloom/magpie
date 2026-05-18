@@ -17,8 +17,9 @@ struct _MailAccountPage
 {
   AdwNavigationPage parent;
 
-  AdwWindowTitle *header_title; /* identity (title) + provider (subtitle) */
-  AdwStatusPage *status_page;   /* HIG-shaped body container */
+  AdwWindowTitle *header_title;    /* identity (title) + provider (subtitle) */
+  GtkToggleButton *sidebar_toggle; /* start-of-header toggle for the parent split view */
+  AdwStatusPage *status_page;      /* HIG-shaped body container */
   MailProgressRing *ring;
   GtkLabel *eta_label;
   GtkButton *sync_button;   /* "Sync now" — visible when idle */
@@ -266,6 +267,13 @@ _mail_account_page_get_description_for_test (MailAccountPage *self)
   return adw_status_page_get_description (self->status_page);
 }
 
+GtkToggleButton *
+mail_account_page_get_sidebar_toggle (MailAccountPage *self)
+{
+  g_return_val_if_fail (MAIL_IS_ACCOUNT_PAGE (self), NULL);
+  return self->sidebar_toggle;
+}
+
 static void
 mail_account_page_dispose (GObject *object)
 {
@@ -285,6 +293,14 @@ mail_account_page_init (MailAccountPage *self)
 
   GtkWidget *toolbar = adw_toolbar_view_new ();
   GtkWidget *header = adw_header_bar_new ();
+  /* Sidebar toggle, packed at the start so the user can always
+   * collapse/uncollapse the sidebar from the account page — same
+   * shape as the toggles on the message-list and message-view
+   * headers. The window binds its active state to the split view. */
+  self->sidebar_toggle = GTK_TOGGLE_BUTTON (gtk_toggle_button_new ());
+  gtk_button_set_icon_name (GTK_BUTTON (self->sidebar_toggle), "sidebar-show-symbolic");
+  gtk_widget_set_tooltip_text (GTK_WIDGET (self->sidebar_toggle), "Toggle sidebar");
+  adw_header_bar_pack_start (ADW_HEADER_BAR (header), GTK_WIDGET (self->sidebar_toggle));
   /* Two-line title widget — identity on top, provider name below.
    * Both are populated by mail_account_page_set_state. */
   self->header_title = ADW_WINDOW_TITLE (adw_window_title_new ("", ""));

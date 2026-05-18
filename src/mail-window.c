@@ -18,6 +18,7 @@ struct _MailWindow
   AdwOverlaySplitView *split_view;
   AdwNavigationView *nav_view;
   GtkToggleButton *sidebar_toggle;
+  GtkToggleButton *message_view_sidebar_toggle;
   MailSidebar *sidebar;
   MailMessageList *message_list;
   MailMessageView *message_view;
@@ -417,6 +418,7 @@ mail_window_class_init (MailWindowClass *klass)
   gtk_widget_class_bind_template_child (widget_class, MailWindow, split_view);
   gtk_widget_class_bind_template_child (widget_class, MailWindow, nav_view);
   gtk_widget_class_bind_template_child (widget_class, MailWindow, sidebar_toggle);
+  gtk_widget_class_bind_template_child (widget_class, MailWindow, message_view_sidebar_toggle);
   gtk_widget_class_bind_template_child (widget_class, MailWindow, sidebar);
   gtk_widget_class_bind_template_child (widget_class, MailWindow, message_list);
   gtk_widget_class_bind_template_child (widget_class, MailWindow, message_view);
@@ -431,8 +433,17 @@ mail_window_init (MailWindow *self)
 {
   gtk_widget_init_template (GTK_WIDGET (self));
 
+  /* Each content-stack page carries its own sidebar toggle so the
+   * affordance is always reachable; binding all of them bidirection-
+   * ally to the same AdwOverlaySplitView::show-sidebar keeps them in
+   * lockstep with each other and with the actual sidebar state. The
+   * account-page binding lives further down, right after the page
+   * is constructed. */
   g_object_bind_property (self->split_view, "show-sidebar",
                           self->sidebar_toggle, "active",
+                          G_BINDING_BIDIRECTIONAL | G_BINDING_SYNC_CREATE);
+  g_object_bind_property (self->split_view, "show-sidebar",
+                          self->message_view_sidebar_toggle, "active",
                           G_BINDING_BIDIRECTIONAL | G_BINDING_SYNC_CREATE);
 
   g_object_bind_property_full (self->message_view, "view-mode",
@@ -449,6 +460,9 @@ mail_window_init (MailWindow *self)
    * initial page. */
   self->account_page = MAIL_ACCOUNT_PAGE (mail_account_page_new ());
   adw_navigation_view_add (self->nav_view, ADW_NAVIGATION_PAGE (self->account_page));
+  g_object_bind_property (self->split_view, "show-sidebar",
+                          mail_account_page_get_sidebar_toggle (self->account_page), "active",
+                          G_BINDING_BIDIRECTIONAL | G_BINDING_SYNC_CREATE);
 
   g_signal_connect (self->sidebar, "folder-selected",
                     G_CALLBACK (on_folder_selected), self);

@@ -118,6 +118,26 @@ test_sync_button_emits_sync_requested (void)
   g_object_unref (page);
 }
 
+/* Regression: when the user is viewing the account page, the sidebar
+ * toggle must be reachable on its header bar just like on the other
+ * content pages — the user complained that the toggle "vanished"
+ * when navigating off the message-list. The page now constructs its
+ * own toggle and exposes it for the window to bind. */
+static void
+test_sidebar_toggle_is_present (void)
+{
+  MailAccountPage *page = MAIL_ACCOUNT_PAGE (mail_account_page_new ());
+  g_object_ref_sink (page);
+
+  GtkToggleButton *toggle = mail_account_page_get_sidebar_toggle (page);
+  g_assert_nonnull (toggle);
+  /* Same icon as the message-list / message-view toggles — keeps the
+   * three header surfaces visually identical. */
+  g_assert_cmpstr (gtk_button_get_icon_name (GTK_BUTTON (toggle)), ==, "sidebar-show-symbolic");
+
+  g_object_unref (page);
+}
+
 static void
 test_sync_button_visibility_follows_active_state (void)
 {
@@ -158,5 +178,7 @@ main (int argc, char **argv)
                    test_sync_button_emits_sync_requested);
   g_test_add_func ("/account-page/sync-button-visibility-follows-active-state",
                    test_sync_button_visibility_follows_active_state);
+  g_test_add_func ("/account-page/sidebar-toggle-is-present",
+                   test_sidebar_toggle_is_present);
   return g_test_run ();
 }
