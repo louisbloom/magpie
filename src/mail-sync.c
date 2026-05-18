@@ -625,7 +625,7 @@ on_batch_done (GObject *src,
 
   self->fetch_index += bodies->len;
   const guint n = self->pending_fetches->len;
-  set_progress (self, 0.20 + 0.80 * ((double) self->fetch_index / (double) n));
+  set_progress (self, MAIL_SYNC_FETCH_BEGIN_PROGRESS + (1.0 - MAIL_SYNC_FETCH_BEGIN_PROGRESS) * ((double) self->fetch_index / (double) n));
 
   if (self->fetch_index < n)
     {

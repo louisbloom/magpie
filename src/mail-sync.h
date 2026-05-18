@@ -52,4 +52,21 @@ gboolean mail_sync_is_running (MailSync *self);
 double mail_sync_get_progress (MailSync *self);
 const char *mail_sync_get_status (MailSync *self);
 
+/* The progress fraction MailSync reaches when PHASE_FETCH begins.
+ * PHASE_FOLDERS and PHASE_LISTS share [0.0, MAIL_SYNC_FETCH_BEGIN_PROGRESS)
+ * and finish in seconds; PHASE_FETCH owns [MAIL_SYNC_FETCH_BEGIN_PROGRESS, 1.0]
+ * and dominates the wall-clock. The per-second progress rate
+ * differs by ~60× between the two regimes, so a sliding-window ETA
+ * fed every notify::progress will be biased optimistic until the
+ * pre-fetch samples age out of its window. Consumers that drive an
+ * ETA off notify::progress should ignore samples whose fraction is
+ * below this threshold — see mail_sync_progress_is_in_fetch_phase. */
+#define MAIL_SYNC_FETCH_BEGIN_PROGRESS 0.20
+
+static inline gboolean
+mail_sync_progress_is_in_fetch_phase (double fraction)
+{
+  return fraction >= MAIL_SYNC_FETCH_BEGIN_PROGRESS;
+}
+
 G_END_DECLS

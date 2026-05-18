@@ -7,6 +7,7 @@
  */
 
 #include "../src/mail-eta.h"
+#include "../src/mail-sync.h"
 
 #include <glib.h>
 
@@ -239,6 +240,81 @@ test_batched_progress_window_smooth (void)
   mail_eta_free (wide);
 }
 
+/* Pin the "don't feed PHASE_FOLDERS / PHASE_LISTS samples to the ETA"
+ * rule from mail-account-page.c::update_progress. The pre-fetch
+ * phases move the progress fraction up an order of magnitude faster
+ * per second than the FETCH phase, so admitting their samples to a
+ * sliding-window estimator that's about to extrapolate to fraction=1
+ * makes the ETA "About 1 minute" while the real remaining time is
+ * "About 13 minutes". mail_sync_progress_is_in_fetch_phase is the
+ * gate. The test runs the same Gmail-shaped sample stream through
+ * two estimators — one gated, one not — and asserts the gated
+ * version's ETA is at least 5× the ungated one at the warm-up
+ * instant. */
+static void
+test_eta_gates_out_pre_fetch_samples (void)
+{
+  typedef struct
+  {
+    gint64 t_us;
+    double frac;
+  } PhaseSample;
+
+#define S(secs) ((gint64) ((double) (secs) * G_USEC_PER_SEC))
+  const PhaseSample stream[] = {
+    /* PHASE_FOLDERS: anchor at fraction=0, completion at 0.05. */
+    { S (0.0), 0.0 },
+    { S (1.0), 0.05 },
+    /* PHASE_LISTS: ten folders, list_messages completing every
+     * 0.5 s, fraction stepping +0.015 each up to 0.20 at folder 10. */
+    { S (1.5), 0.065 },
+    { S (2.0), 0.080 },
+    { S (2.5), 0.095 },
+    { S (3.0), 0.110 },
+    { S (3.5), 0.125 },
+    { S (4.0), 0.140 },
+    { S (4.5), 0.155 },
+    { S (5.0), 0.170 },
+    { S (5.5), 0.185 },
+    { S (6.0), 0.200 },
+    /* PHASE_FETCH: five batch completions 5 s apart, +0.005 each.
+     * The rate is what the user actually sees on their Gmail
+     * account during the first 30 s of the fetch phase. */
+    { S (11.0), 0.205 },
+    { S (16.0), 0.210 },
+    { S (21.0), 0.215 },
+    { S (26.0), 0.220 },
+    { S (31.0), 0.225 },
+  };
+#undef S
+
+  MailEta *gated = mail_eta_new (120 * G_USEC_PER_SEC);
+  MailEta *ungated = mail_eta_new (120 * G_USEC_PER_SEC);
+  for (gsize i = 0; i < G_N_ELEMENTS (stream); i++)
+    {
+      if (mail_sync_progress_is_in_fetch_phase (stream[i].frac))
+        mail_eta_record (gated, stream[i].t_us, stream[i].frac);
+      mail_eta_record (ungated, stream[i].t_us, stream[i].frac);
+    }
+
+  double s_gated = mail_eta_seconds_remaining (gated);
+  double s_ungated = mail_eta_seconds_remaining (ungated);
+
+  g_assert_cmpfloat (s_gated, >, 0.0);
+  g_assert_cmpfloat (s_ungated, >, 0.0);
+  /* Gated rate uses only FETCH-rate samples (~0.001 frac/s) and
+   * projects ~775 s remaining; ungated rate is dragged up by the
+   * dense pre-fetch samples (~0.0073 frac/s) and projects ~107 s.
+   * The 5× floor is set below the analytical ~7× ratio so
+   * floating-point noise doesn't trip the test. Removing the gate
+   * in mail-account-page.c would collapse both estimates onto the
+   * ungated value and trip this assertion. */
+  g_assert_cmpfloat (s_gated / s_ungated, >=, 5.0);
+
+  mail_eta_free (ungated);
+  mail_eta_free (gated);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -252,5 +328,7 @@ main (int argc, char **argv)
   g_test_add_func ("/eta/format-buckets", test_format_buckets);
   g_test_add_func ("/eta/batched-progress-window-smooth",
                    test_batched_progress_window_smooth);
+  g_test_add_func ("/eta/gates-out-pre-fetch-samples",
+                   test_eta_gates_out_pre_fetch_samples);
   return g_test_run ();
 }

@@ -78,7 +78,16 @@ update_progress (MailAccountPage *self)
 
   if (self->eta != NULL)
     {
-      mail_eta_record (self->eta, g_get_monotonic_time (), fraction);
+      /* Only feed PHASE_FETCH samples to the estimator. PHASE_FOLDERS
+       * and PHASE_LISTS move the fraction up ~60× faster per second
+       * than PHASE_FETCH does, so admitting them poisons the
+       * sliding-window rate (the ETA reads "About 1 minute" while the
+       * real remaining time is "About 30 minutes"). With the gate in
+       * place, the label reads "Calculating…" through the first few
+       * seconds of the pass and then converges to a stable FETCH-only
+       * estimate after the first batch. */
+      if (mail_sync_progress_is_in_fetch_phase (fraction))
+        mail_eta_record (self->eta, g_get_monotonic_time (), fraction);
       double s = mail_eta_seconds_remaining (self->eta);
       g_autofree char *text = mail_eta_format (s);
       gtk_label_set_label (self->eta_label, text);
