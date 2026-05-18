@@ -25,6 +25,7 @@
 
 #include "config.h"
 
+#include "magpie-version.h"
 #include "mail-backend-imap.h"
 #include "mail-imap-id.h"
 #include "mail-imap-retry.h"
@@ -33,6 +34,7 @@
 #include <gmime/gmime.h>
 #include <goa/goa.h>
 #include <libetpan/libetpan.h>
+#include <libetpan/mailimap_id.h>
 #include <string.h>
 
 typedef struct
@@ -224,6 +226,21 @@ ensure_connected_locked (MailBackendIMAP *self,
       set_imap_error (error, rc, "XOAUTH2");
       drop_connection_locked (self);
       return FALSE;
+    }
+
+  /* RFC 2971 ID exchange: best-effort. Advertising ourselves shows up
+   * in Gmail's IMAP "Last account activity" log so the user can tell
+   * which client connected. Servers that don't support ID (or refuse
+   * the command) return NO/BAD, which leaves session state intact —
+   * we ignore the result. */
+  if (mailimap_has_id (self->imap))
+    {
+      char *server_name = NULL;
+      char *server_version = NULL;
+      mailimap_id_basic (self->imap, "Magpie", MAGPIE_VERSION,
+                         &server_name, &server_version);
+      free (server_name);
+      free (server_version);
     }
   return TRUE;
 }
