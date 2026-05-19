@@ -159,9 +159,13 @@ set_buffer_utf8 (MailMessageView *self,
     }
 }
 
+/* @wrap = TRUE for interpreted plain text (PLAIN and RENDERED-plain
+ * modes), FALSE for the raw SOURCE view where long base64 / refolded
+ * header lines must remain visible verbatim for debugging. */
 static void
-show_text_page (MailMessageView *self, const char *data, gssize len)
+show_text_page (MailMessageView *self, const char *data, gssize len, gboolean wrap)
 {
+  gtk_text_view_set_wrap_mode (self->text_view, wrap ? GTK_WRAP_WORD_CHAR : GTK_WRAP_NONE);
   set_buffer_utf8 (self, data, len);
   gtk_stack_set_visible_child_name (self->stack, "text");
 }
@@ -192,7 +196,7 @@ render (MailMessageView *self)
     case MAIL_MESSAGE_VIEW_MODE_PLAIN:
       if (self->plain_text != NULL)
         {
-          show_text_page (self, self->plain_text, -1);
+          show_text_page (self, self->plain_text, -1, TRUE);
         }
       else
         {
@@ -207,11 +211,11 @@ render (MailMessageView *self)
         {
           gsize len = 0;
           const char *data = g_bytes_get_data (self->raw_bytes, &len);
-          show_text_page (self, data, (gssize) len);
+          show_text_page (self, data, (gssize) len, FALSE);
         }
       else
         {
-          show_text_page (self, "", 0);
+          show_text_page (self, "", 0, FALSE);
         }
       return;
 
@@ -226,7 +230,7 @@ render (MailMessageView *self)
       show_html_page (self, self->best_content);
       return;
     case MAIL_MIME_KIND_PLAIN:
-      show_text_page (self, self->best_content != NULL ? self->best_content : "", -1);
+      show_text_page (self, self->best_content != NULL ? self->best_content : "", -1, TRUE);
       return;
     case MAIL_MIME_KIND_UNSUPPORTED:
       {
@@ -313,7 +317,7 @@ mail_message_view_load (MailMessageView *self,
   g_clear_object (&self->cancellable);
   self->cancellable = g_cancellable_new ();
 
-  show_text_page (self, "Loading…\n", -1);
+  show_text_page (self, "Loading…\n", -1, TRUE);
 
   LoadMessageCtx *ctx = g_new (LoadMessageCtx, 1);
   ctx->self = g_object_ref (self);

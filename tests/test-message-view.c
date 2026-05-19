@@ -238,6 +238,77 @@ test_view_mode_transitions (void)
   mail_backend_destroy (fake);
 }
 
+/* Depth-first descent to find the first descendant of @type. Used by
+ * the wrap-mode test to grab the internal GtkTextView; the view's
+ * widget surface keeps it private so we have to walk for it. */
+static GtkWidget *
+find_descendant (GtkWidget *root, GType type)
+{
+  if (root == NULL)
+    return NULL;
+  if (g_type_is_a (G_OBJECT_TYPE (root), type))
+    return root;
+  for (GtkWidget *child = gtk_widget_get_first_child (root);
+       child != NULL;
+       child = gtk_widget_get_next_sibling (child))
+    {
+      GtkWidget *hit = find_descendant (child, type);
+      if (hit != NULL)
+        return hit;
+    }
+  return NULL;
+}
+
+static void
+test_plain_wraps_source_does_not (void)
+{
+  /* Plain-text bodies should wrap at the viewport (modern long-line
+   * mail reads as a column of fragments otherwise). The Source toggle
+   * MUST keep wrap off — long base64 / refolded headers need to remain
+   * verbatim for debugging. Same GtkTextView is reused across modes,
+   * so the wrap flag toggles per-render. */
+  FakeMessageSpec msgs[] = {
+    { "p1", "Plain", "a@b.c", 1700000000, FALSE,
+      "Subject: t\r\n"
+      "From: a@b.c\r\n"
+      "Content-Type: text/plain; charset=utf-8\r\n"
+      "\r\n"
+      "this is the body\r\n" },
+  };
+
+  MailBackend *fake = mail_backend_fake_new ();
+  mail_backend_fake_set_messages (fake, "inbox", msgs, G_N_ELEMENTS (msgs));
+
+  GtkWidget *window = gtk_window_new ();
+  gtk_window_set_default_size (GTK_WINDOW (window), 400, 400);
+
+  MailMessageView *view = MAIL_MESSAGE_VIEW (mail_message_view_new ());
+  gtk_window_set_child (GTK_WINDOW (window), GTK_WIDGET (view));
+  gtk_window_present (GTK_WINDOW (window));
+  pump_main_loop ();
+
+  mail_message_view_load (view, fake, "p1");
+  pump_main_loop ();
+
+  GtkTextView *tv = (GtkTextView *) find_descendant (GTK_WIDGET (view), GTK_TYPE_TEXT_VIEW);
+  g_assert_nonnull (tv);
+
+  /* Default (RENDERED) lands in the picker's PLAIN branch — wraps. */
+  g_assert_cmpint (gtk_text_view_get_wrap_mode (tv), ==, GTK_WRAP_WORD_CHAR);
+
+  /* Source: no wrap. */
+  g_object_set (view, "view-mode", MAIL_MESSAGE_VIEW_MODE_SOURCE, NULL);
+  g_assert_cmpint (gtk_text_view_get_wrap_mode (tv), ==, GTK_WRAP_NONE);
+
+  /* Plain toggle: wraps again. */
+  g_object_set (view, "view-mode", MAIL_MESSAGE_VIEW_MODE_PLAIN, NULL);
+  g_assert_cmpint (gtk_text_view_get_wrap_mode (tv), ==, GTK_WRAP_WORD_CHAR);
+
+  gtk_window_destroy (GTK_WINDOW (window));
+  pump_main_loop ();
+  mail_backend_destroy (fake);
+}
+
 static void
 test_unsupported_shows_status_page (void)
 {
@@ -309,6 +380,8 @@ main (int argc,
                    test_natural_height_does_not_propagate_giant_buffer);
   g_test_add_func ("/message-view/view-mode-transitions",
                    test_view_mode_transitions);
+  g_test_add_func ("/message-view/plain-wraps-source-does-not",
+                   test_plain_wraps_source_does_not);
   g_test_add_func ("/message-view/unsupported-shows-status-page",
                    test_unsupported_shows_status_page);
   return g_test_run ();
