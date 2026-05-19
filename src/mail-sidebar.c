@@ -654,6 +654,43 @@ on_sidebar_realize (GtkWidget *widget,
   goa_client_new (self->cancellable, on_goa_client_ready, g_object_ref (self));
 }
 
+/* Pinned branding strip shown above the scroller. Icon + name follow
+ * the same left-aligned column as the account/folder rows below
+ * (xalign=0.0 matches sidebar_account_row's title at line ~178), so
+ * the user reads "this is Magpie, here are your accounts" as one
+ * visual axis.
+ *
+ * Height is pinned to BRANDING_STRIP_HEIGHT_PX so the strip lines up
+ * across the split: the right pane's AdwHeaderBars have an effective
+ * min-height of 46px in stock libadwaita, and matching it here makes
+ * the top edge of the account list flush with the top edge of the
+ * message-list / message-view content areas. The icon + label are
+ * vertically centred inside that slot. */
+#define BRANDING_STRIP_HEIGHT_PX 46
+
+static GtkWidget *
+build_branding_strip (void)
+{
+  GtkWidget *hbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
+  gtk_widget_set_margin_start (hbox, 12);
+  gtk_widget_set_margin_end (hbox, 12);
+  gtk_widget_set_size_request (hbox, -1, BRANDING_STRIP_HEIGHT_PX);
+
+  GtkWidget *icon = gtk_image_new_from_icon_name ("org.gnome.Magpie");
+  gtk_image_set_pixel_size (GTK_IMAGE (icon), 24);
+  gtk_widget_set_valign (icon, GTK_ALIGN_CENTER);
+  gtk_box_append (GTK_BOX (hbox), icon);
+
+  GtkWidget *label = gtk_label_new ("Magpie");
+  gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+  gtk_widget_add_css_class (label, "title-4");
+  gtk_widget_set_hexpand (label, TRUE);
+  gtk_widget_set_valign (label, GTK_ALIGN_CENTER);
+  gtk_box_append (GTK_BOX (hbox), label);
+
+  return hbox;
+}
+
 static void
 mail_sidebar_init (MailSidebar *self)
 {
@@ -663,10 +700,18 @@ mail_sidebar_init (MailSidebar *self)
   self->backend_listener_ctxs = g_ptr_array_new_with_free_func (g_free);
   self->cancellable = g_cancellable_new ();
 
+  /* MailSidebar's single direct child is a vertical box; branding sits
+   * pinned at the top, the scroller takes the remaining space. */
+  GtkWidget *vbox = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+  gtk_widget_set_parent (vbox, GTK_WIDGET (self));
+
+  gtk_box_append (GTK_BOX (vbox), build_branding_strip ());
+
   GtkWidget *scroller = gtk_scrolled_window_new ();
   gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scroller),
                                   GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
-  gtk_widget_set_parent (scroller, GTK_WIDGET (self));
+  gtk_widget_set_vexpand (scroller, TRUE);
+  gtk_box_append (GTK_BOX (vbox), scroller);
 
   self->list_box = GTK_LIST_BOX (gtk_list_box_new ());
   gtk_widget_add_css_class (GTK_WIDGET (self->list_box), "navigation-sidebar");

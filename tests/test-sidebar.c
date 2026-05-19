@@ -488,6 +488,81 @@ test_account_added_signal_fires_for_test_account (Fixture *f, gconstpointer ud)
   g_object_unref (sb);
 }
 
+/* Walk @root and find the first GtkImage whose icon-name matches
+ * @needle (g_strcmp0). NULL if not present. */
+static GtkImage *
+find_image_by_icon_name (GtkWidget *root,
+                         const char *needle)
+{
+  GQueue stack = G_QUEUE_INIT;
+  g_queue_push_tail (&stack, root);
+  while (!g_queue_is_empty (&stack))
+    {
+      GtkWidget *w = g_queue_pop_head (&stack);
+      if (GTK_IS_IMAGE (w))
+        {
+          const char *name = gtk_image_get_icon_name (GTK_IMAGE (w));
+          if (g_strcmp0 (name, needle) == 0)
+            {
+              g_queue_clear (&stack);
+              return GTK_IMAGE (w);
+            }
+        }
+      for (GtkWidget *c = gtk_widget_get_first_child (w); c != NULL;
+           c = gtk_widget_get_next_sibling (c))
+        g_queue_push_tail (&stack, c);
+    }
+  return NULL;
+}
+
+/* Walk @root and find the first GtkLabel whose text matches @needle.
+ * NULL if not present. */
+static GtkLabel *
+find_label_by_text (GtkWidget *root,
+                    const char *needle)
+{
+  GQueue stack = G_QUEUE_INIT;
+  g_queue_push_tail (&stack, root);
+  while (!g_queue_is_empty (&stack))
+    {
+      GtkWidget *w = g_queue_pop_head (&stack);
+      if (GTK_IS_LABEL (w))
+        {
+          const char *text = gtk_label_get_text (GTK_LABEL (w));
+          if (g_strcmp0 (text, needle) == 0)
+            {
+              g_queue_clear (&stack);
+              return GTK_LABEL (w);
+            }
+        }
+      for (GtkWidget *c = gtk_widget_get_first_child (w); c != NULL;
+           c = gtk_widget_get_next_sibling (c))
+        g_queue_push_tail (&stack, c);
+    }
+  return NULL;
+}
+
+/* Regression: the sidebar shows app branding (icon + "Magpie") at the
+ * top, left-aligned. Previously the sidebar carried an empty
+ * AdwHeaderBar that was removed in commit a775bdb; this test pins the
+ * subsequent reintroduction so an accidental future drop is caught. */
+static void
+test_sidebar_shows_branding (void)
+{
+  MailSidebar *sb = MAIL_SIDEBAR (mail_sidebar_new ());
+  g_object_ref_sink (sb);
+
+  GtkImage *icon = find_image_by_icon_name (GTK_WIDGET (sb), "org.gnome.Magpie");
+  g_assert_nonnull (icon);
+
+  GtkLabel *label = find_label_by_text (GTK_WIDGET (sb), "Magpie");
+  g_assert_nonnull (label);
+  /* Left-aligned along the same x-axis as account/folder row titles. */
+  g_assert_cmpfloat (gtk_label_get_xalign (label), ==, 0.0f);
+
+  g_object_unref (sb);
+}
+
 int
 main (int argc,
       char *argv[])
@@ -520,6 +595,7 @@ main (int argc,
   g_test_add ("/sidebar/account-added-signal",
               Fixture, NULL, fixture_set_up,
               test_account_added_signal_fires_for_test_account, fixture_tear_down);
+  g_test_add_func ("/sidebar/shows-branding", test_sidebar_shows_branding);
 
   return g_test_run ();
 }
