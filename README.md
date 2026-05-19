@@ -4,35 +4,91 @@ A native GNOME mail client. C + GTK4 + libadwaita, built on top of
 `GNOME Online Accounts` for account discovery, with provider-specific
 backends for Microsoft Graph and IMAP.
 
-## Goal
+## For users
 
-Provide a fast, HIG-correct mail reader that fits the GNOME desktop the
-same way Files, Calendar, or Contacts do — no Electron, no JavaScript,
-no per-provider GUI quirks. Accounts come from the user's GOA session;
-the app discovers them, syncs each account's messages to a local
-Maildir + sqlite index, and renders the result with stock libadwaita
-widgets.
+A fast, HIG-correct mail reader that fits the GNOME desktop the same
+way Files, Calendar, or Contacts do — no Electron, no JavaScript, no
+per-provider GUI quirks. Accounts come from your GOA session; Magpie
+discovers them, syncs each account's messages to a local Maildir +
+sqlite index, and renders the result with stock libadwaita widgets.
 
-Storage is local-first (mutt / gnus-style): the UI always reads from
-the on-disk store under `~/Mail/<identity>/`, and remote providers are
-contacted only when the user explicitly triggers a sync from the
-account page. The provider then reconciles its message list into the
-store, pulling new bodies and pruning ones that have disappeared
-upstream. The on-disk Maildir is authoritative — other clients (mutt,
-another magpie instance) sharing the same Maildir interoperate cleanly,
-and their flag changes propagate to magpie's UI in real time via a
-per-folder `GFileMonitor`.
+### Your mail stays on disk, in a format other tools understand
 
-The scope is deliberately narrow at this stage: browse the folders of
-your configured accounts, trigger and watch syncs, read messages
-(MIME-aware: HTML in WebKit by default, with toggles for the
-text/plain alternative and the raw RFC822 source), and reply with a
-Gnus-style quoted draft. SMTP send is not wired yet — Send currently
-appends to a debug `Outbox.mbox` in the account root. Search,
+Storage is local-first (mutt / gnus-style). Each account's messages
+live under `~/Mail/<identity>/` as a regular Maildir tree, and Magpie's
+UI always reads from disk. Remote providers are contacted only when
+you explicitly trigger a sync from the account page. The on-disk
+Maildir is authoritative — point mutt or another Magpie instance at
+the same `~/Mail` and everything interoperates cleanly. If mutt marks
+a message read while Magpie is open, the boldness drops off the row in
+real time; the reverse holds too.
+
+### What you can do today
+
+- **Browse folders.** A toggleable sidebar lists every account from
+  `GoaClient` with provider icons, and the folders under each account.
+  Sidebar width is pinned to the widest row so it doesn't balloon on
+  widescreen displays.
+- **Filter the message list.** A virtualizing list opens 10k-row
+  folders instantly and scrolls smoothly. The header bar carries an
+  unread-only toggle that hides read mail without reloading.
+- **Read messages three ways.** Toggle group in the message-view header
+  bar: _Rendered_ (HTML in a sandboxed WebKit view, or the text/plain
+  alternative per RFC 2046 §5.1.4), _Plain_ (forced text/plain
+  alternative; greyed out when none exists), and _Source_ (raw
+  RFC 5322). Unsupported content types surface an explanatory placeholder
+  instead of dumping binary.
+- **Reply.** A Reply button in the message-view header opens a compose
+  dialog pre-filled Gnus-style: attribution line plus `> `-quoted
+  text/plain body (or HTML→text fallback when no plain alternative
+  exists).
+- **Trigger a sync.** Click an account row to see its sync page —
+  "Sync now" in the idle state, a centered progress ring with a live
+  status line, a sliding-window ETA ("About 3 minutes remaining"), and
+  a Cancel button while a pass is running.
+- **Live disk updates.** Reading a mail in Magpie, or marking it read
+  in a parallel mutt session, both flip the sidebar unread badge and
+  the row boldness in the same frame. A per-account watcher with a
+  120 ms debounce reconciles disk → sqlite drift in real time and at
+  startup, so changes accumulated while Magpie was closed are picked
+  up before you click anything.
+
+Providers covered: Microsoft Graph (Outlook / Office 365) and IMAP via
+SASL XOAUTH2 (Gmail tested). Selection is automatic per-account based
+on what GOA reports.
+
+### What's not in yet
+
+Magpie is an early prototype. SMTP send is not wired — the Send button
+in the compose dialog appends to a debug `Outbox.mbox` in the account
+root so you can read your draft back with mutt or `less`. Search,
 threading, and push notifications are explicit follow-ups, not
 held-back features.
 
-## Principles
+### Install and run
+
+Magpie ships as source. On Fedora:
+
+```sh
+sudo dnf install gnome-online-accounts-devel libsoup3-devel \
+                 json-glib-devel libetpan-devel libxml2-devel \
+                 gtk4-devel libadwaita-devel gmime30-devel \
+                 sqlite-devel webkitgtk6.0-devel
+
+./autogen.sh
+mkdir -p build && cd build
+../configure --prefix=$HOME/.local --enable-debug
+make -j$(nproc)
+make install
+magpie
+```
+
+Configure your mail accounts in GNOME Settings → Online Accounts
+first; Magpie picks them up automatically.
+
+## For contributors
+
+### Principles
 
 These guide every code-level decision in the repo. They're listed first
 because they're how to evaluate a change, not just describe one.
@@ -93,36 +149,8 @@ because they're how to evaluate a change, not just describe one.
   GOA for OAuth refresh. We do not reinvent what the platform already
   maintains.
 
-## Status
+### Architecture
 
-Early prototype. The current shape:
-
-- **Sidebar.** Toggleable left pane listing accounts from `GoaClient`
-  with provider icons; per-account folder rows below each header. Both
-  account and folder rows are selectable navigation targets. Sidebar
-  width is content-driven (pinned to the widest row) so it doesn't
-  ballooon on widescreen displays.
-- **Right pane.** Three pages routed through `AdwNavigationView`: the
-  message list (a virtualizing `GtkListView` over the local store, so
-  10k-row folders open instantly and scroll smoothly; the header bar
-  carries an unread-only filter toggle that hides read mail without
-  reloading), the message viewer (pushed on row activation, with an
-  `AdwToggleGroup` in the header bar exposing three exclusive view
-  modes — _Rendered_ (HTML in a sandboxed `WebKitWebView` or the
-  text/plain alternative, per RFC 2046 §5.1.4), _Plain_ (forced
-  text/plain alternative; insensitive when none exists), and _Source_
-  (raw RFC822). Unsupported content types surface an `AdwStatusPage`
-  placeholder instead of dumping binary. A Reply button opens an
-  `AdwDialog` compose window pre-filled Gnus-style — attribution line
-  plus `> `-quoted text/plain body, or HTML→text fallback when no
-  plain alternative exists), and the account page (shown when an
-  account row is selected, or auto-switched-to when a sync starts on
-  the current account).
-- **Account page.** `AdwStatusPage`-based body with a "Sync now" button
-  in the idle state; during a pass the same slot shows a centered
-  progress ring, a live status line, a sliding-window ETA ("About 3
-  minutes remaining"), and a Cancel button. The header bar carries an
-  `AdwWindowTitle` with the account identity over the provider name.
 - **Sync engine.** `MailSync` is a per-account one-shot reconciler:
   list folders → list messages per folder → fetch new bodies → upsert
   into the local store. Triggered manually from the account page; no
@@ -132,41 +160,25 @@ Early prototype. The current shape:
 - **Local store.** `MailStore` owns a Maildir tree + sqlite index at
   `~/Mail/<identity>/`. The Maildir is authoritative; sqlite is an
   indexed cache over it. The UI reads through `mail-backend-store` (a
-  `MailBackend` implementation that wraps the store), so the
-  rendering path never blocks on the network and the sync engine is
-  the only thing that talks to providers.
-- **Live updates from disk.** Reading a mail in magpie or marking it
-  read in a parallel mutt session both flow through the same
-  push-based change-notification spine on `MailStore` and
-  `MailBackend`: the sidebar unread badge and the message-list
-  boldness update in the same frame, without a sync running. A
-  per-account `MailMaildirWatcher` arms one `GFileMonitor` per
-  folder's `cur/` with a 120 ms debounce; watcher events run the
-  disk → sqlite reconciler, which emits the same events the local
-  mark-read path emits. The reconciler also runs once at startup so
-  drift accumulated while magpie was closed is corrected before the
-  user clicks anything.
+  `MailBackend` implementation that wraps the store), so the rendering
+  path never blocks on the network and the sync engine is the only
+  thing that talks to providers.
+- **Disk → UI change-notification spine.** A per-account
+  `MailMaildirWatcher` arms one `GFileMonitor` per folder's `cur/`
+  with a 120 ms debounce; watcher events run the disk → sqlite
+  reconciler, which emits the same events as the local mark-read
+  path. The reconciler also runs once at startup so drift accumulated
+  while Magpie was closed is corrected before the user clicks anything.
 - **Providers.** Microsoft Graph (functional, with `@odata.nextLink`
   pagination); IMAP via libetpan with SASL XOAUTH2 (Gmail tested),
   with cross-folder body deduplication keyed on the RFC 5322
-  `Message-ID` header — a message in INBOX and `[Gmail]/All Mail`
-  is fetched once and the Maildir bodies hardlink-share an inode.
-  Fetches are batched (one `UID FETCH BODY.PEEK[]` per ~50 messages)
-  and the GOA OAuth token is cached across the pass, so an
-  initial-sync's per-message round-trip cost amortises into a
-  near-constant overhead. Selection is per-account via
-  GOA's reported provider type.
-- **Tests.** Twenty-one test binaries under `tests/`, running under
-  `gtk_test_init` where they touch widgets: `test-about`,
-  `test-account-page`, `test-accounts`, `test-arena`,
-  `test-backend-contract`, `test-backend-store`, `test-compose-window`,
-  `test-eta`, `test-html-to-text`, `test-imap-id`, `test-imap-retry`,
-  `test-maildir-watcher`, `test-message-list`, `test-message-view`,
-  `test-mime`, `test-outbox`, `test-quote`, `test-sidebar`,
-  `test-store`, `test-sync`, `test-window`. Every bug fix lands with a
-  regression test (see the principles).
+  `Message-ID` header — a message in INBOX and `[Gmail]/All Mail` is
+  fetched once and the Maildir bodies hardlink-share an inode. Fetches
+  are batched (one `UID FETCH BODY.PEEK[]` per ~50 messages) and the
+  GOA OAuth token is cached across the pass, so an initial-sync's
+  per-message round-trip cost amortises into a near-constant overhead.
 
-## Build
+### Build from source
 
 ```sh
 sudo dnf install gnome-online-accounts-devel libsoup3-devel \
@@ -182,7 +194,19 @@ make check
 ./src/magpie
 ```
 
-## Developer tooling
+### Tests
+
+Twenty-one test binaries under `tests/`, running under `gtk_test_init`
+where they touch widgets: `test-about`, `test-account-page`,
+`test-accounts`, `test-arena`, `test-backend-contract`,
+`test-backend-store`, `test-compose-window`, `test-eta`,
+`test-html-to-text`, `test-imap-id`, `test-imap-retry`,
+`test-maildir-watcher`, `test-message-list`, `test-message-view`,
+`test-mime`, `test-outbox`, `test-quote`, `test-sidebar`, `test-store`,
+`test-sync`, `test-window`. Every bug fix lands with a regression test
+(see the principles).
+
+### Developer tooling
 
 - `make format` — `clang-format` on the C tree, `xmllint` (2-space GNOME
   style) on the XML / GtkBuilder files under `data/`, and `prettier` on
