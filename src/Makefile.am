@@ -8,6 +8,8 @@ magpie_SOURCES = \
     mail-arena.h \
     mail-application.c \
     mail-application.h \
+    mail-about.c \
+    mail-about.h \
     mail-window.c \
     mail-window.h \
     mail-sidebar.c \

@@ -1,6 +1,6 @@
 # tests/Makefile.am - Unit tests for Magpie.
 
-UNIT_TESTS = test-arena test-accounts test-sidebar test-backend-contract test-message-list test-message-view test-mime test-imap-id test-imap-retry test-store test-backend-store test-sync test-eta test-account-page test-window test-maildir-watcher
+UNIT_TESTS = test-arena test-accounts test-sidebar test-backend-contract test-message-list test-message-view test-mime test-imap-id test-imap-retry test-store test-backend-store test-sync test-eta test-account-page test-window test-maildir-watcher test-about
 
 check_PROGRAMS = $(UNIT_TESTS)
 TESTS          = $(UNIT_TESTS)
@@ -31,6 +31,8 @@ test_accounts_SOURCES = test-accounts.c
 test_eta_SOURCES      = test-eta.c $(top_srcdir)/src/mail-eta.c
 test_window_SOURCES   = test-window.c
 test_window_CPPFLAGS  = $(AM_CPPFLAGS) -DMAGPIE_TOP_SRCDIR=\"$(abs_top_srcdir)\"
+test_about_SOURCES    = test-about.c
+test_about_CPPFLAGS   = $(AM_CPPFLAGS) -DMAGPIE_TOP_SRCDIR=\"$(abs_top_srcdir)\"
 
 test_account_page_SOURCES = \
     test-account-page.c \

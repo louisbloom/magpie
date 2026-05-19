@@ -55,6 +55,26 @@ test_message_view_has_sidebar_toggle (void)
   g_assert_nonnull (strstr (xml, "id=\"message_view_sidebar_toggle\""));
 }
 
+/* The sidebar AdwNavigationPage goes straight to MailSidebar with no
+ * AdwHeaderBar (and no AdwToolbarView wrapper) — the panel is kept
+ * intentionally clean. App branding now lives in the About dialog
+ * (mail-about.c) reachable via Ctrl+Shift+A. Exactly two AdwHeaderBar
+ * objects remain in the XML: message-list and message-view. */
+static void
+test_sidebar_has_no_header (void)
+{
+  g_autofree char *xml = load_window_ui ();
+  const char *needle = "<object class=\"AdwHeaderBar\"";
+  guint count = 0;
+  const char *p = xml;
+  while ((p = strstr (p, needle)) != NULL)
+    {
+      count++;
+      p += strlen (needle);
+    }
+  g_assert_cmpuint (count, ==, 2);
+}
+
 /* Belt-and-braces: every sidebar-toggle button in the XML uses the
  * same state-reflective icon, so the three header bars (message-list,
  * message-view, account-page) look identical and the GtkToggleButton's
@@ -83,6 +103,8 @@ main (int argc, char **argv)
                    test_message_list_has_sidebar_toggle);
   g_test_add_func ("/window/message-view-has-sidebar-toggle",
                    test_message_view_has_sidebar_toggle);
+  g_test_add_func ("/window/sidebar-has-no-header",
+                   test_sidebar_has_no_header);
   g_test_add_func ("/window/sidebar-toggle-icon-consistency",
                    test_sidebar_toggle_icon_consistency);
   return g_test_run ();

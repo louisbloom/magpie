@@ -31,14 +31,7 @@
             <property name="title">Mail</property>
             <property name="tag">sidebar</property>
             <property name="child">
-              <object class="AdwToolbarView">
-                <child type="top">
-                  <object class="AdwHeaderBar"/>
-                </child>
-                <property name="content">
-                  <object class="MailSidebar" id="sidebar"/>
-                </property>
-              </object>
+              <object class="MailSidebar" id="sidebar"/>
             </property>
           </object>
         </property>
