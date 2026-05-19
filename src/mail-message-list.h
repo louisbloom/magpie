@@ -31,12 +31,24 @@ void mail_message_list_load (MailMessageList *self,
 void mail_message_list_mark_read (MailMessageList *self,
                                   const char *message_id);
 
+/* Filter the visible rows to messages where MailMessageMeta::unread is
+ * TRUE. The underlying store is untouched; only the GtkListView sees
+ * fewer rows. State persists across mail_message_list_load() calls. */
+void mail_message_list_set_show_unread_only (MailMessageList *self,
+                                             gboolean unread_only);
+gboolean mail_message_list_get_show_unread_only (MailMessageList *self);
+
 /* Test-only: borrowed pointer to the internal GtkListView. */
 GtkListView *_mail_message_list_get_list_view_for_test (MailMessageList *self);
 
 /* Test-only: borrowed pointer to the backing GListStore (item count
  * is the true row count regardless of how many widgets are realised). */
 GListModel *_mail_message_list_get_model_for_test (MailMessageList *self);
+
+/* Test-only: borrowed pointer to the filtered model that feeds the
+ * GtkListView. Its item count reflects the visible row count under the
+ * current unread-only filter setting. */
+GListModel *_mail_message_list_get_filter_model_for_test (MailMessageList *self);
 
 /* Test-only: borrowed MailMessageMeta for the row at @index, or NULL
  * if out of range. The pointer follows the backend arena's lifetime

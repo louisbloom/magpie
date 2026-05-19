@@ -58,6 +58,12 @@
                                 <property name="tooltip-text" translatable="yes">Toggle sidebar</property>
                               </object>
                             </child>
+                            <child type="end">
+                              <object class="GtkToggleButton" id="unread_only_toggle">
+                                <property name="icon-name">mail-unread-symbolic</property>
+                                <property name="tooltip-text" translatable="yes">Show only unread messages</property>
+                              </object>
+                            </child>
                             <!-- Two-line header: folder name on top, account
                                  identity (email) below. Updated by mail-window
                                  on every folder activation. -->

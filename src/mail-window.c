@@ -28,6 +28,7 @@ struct _MailWindow
   AdwNavigationPage *message_view_page;
   AdwToggleGroup *view_mode_group;
   GtkButton *reply_button;
+  GtkToggleButton *unread_only_toggle;
 
   /* Added programmatically. */
   MailAccountPage *account_page;
@@ -429,6 +430,14 @@ mail_window_class_init (MailWindowClass *klass)
   gtk_widget_class_bind_template_child (widget_class, MailWindow, message_view_page);
   gtk_widget_class_bind_template_child (widget_class, MailWindow, view_mode_group);
   gtk_widget_class_bind_template_child (widget_class, MailWindow, reply_button);
+  gtk_widget_class_bind_template_child (widget_class, MailWindow, unread_only_toggle);
+}
+
+static void
+on_unread_only_toggled (GtkToggleButton *button, MailWindow *self)
+{
+  mail_message_list_set_show_unread_only (self->message_list,
+                                          gtk_toggle_button_get_active (button));
 }
 
 static void
@@ -497,6 +506,9 @@ mail_window_init (MailWindow *self)
 
   g_signal_connect (self->reply_button, "clicked",
                     G_CALLBACK (on_reply_clicked), self);
+
+  g_signal_connect (self->unread_only_toggle, "toggled",
+                    G_CALLBACK (on_unread_only_toggled), self);
 }
 
 MailWindow *

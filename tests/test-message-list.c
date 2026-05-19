@@ -506,6 +506,59 @@ test_backend_flags_event_updates_row (Fixture *f, gconstpointer ud)
   mail_backend_emit_change (f->fake, &unknown);
 }
 
+/* Toggling the unread-only filter shrinks the visible model to the
+ * single unread row in the fixture (m2). Turning it off restores all
+ * three rows. When the toggle is on and there are no unread rows,
+ * the GtkStack swaps to the "no-unread" page so the user sees an
+ * explanation rather than an empty list. */
+static void
+test_unread_filter_toggles (Fixture *f, gconstpointer ud)
+{
+  (void) ud;
+  GListModel *store = _mail_message_list_get_model_for_test (f->list);
+  GListModel *filtered = _mail_message_list_get_filter_model_for_test (f->list);
+  g_assert_nonnull (store);
+  g_assert_nonnull (filtered);
+
+  /* Fixture: m1, m2, m3 with m2 unread. */
+  g_assert_cmpuint (g_list_model_get_n_items (store), ==, 3);
+  g_assert_cmpuint (g_list_model_get_n_items (filtered), ==, 3);
+  g_assert_false (mail_message_list_get_show_unread_only (f->list));
+
+  mail_message_list_set_show_unread_only (f->list, TRUE);
+  pump_main_loop ();
+  g_assert_true (mail_message_list_get_show_unread_only (f->list));
+  g_assert_cmpuint (g_list_model_get_n_items (store), ==, 3);
+  g_assert_cmpuint (g_list_model_get_n_items (filtered), ==, 1);
+
+  /* The one visible row corresponds to m2 — the only unread message
+   * in the fixture. (MailMessageRowItem is private to the widget; we
+   * verify identity by reading meta back through the store accessor,
+   * which is sufficient: the filter just hides rows, the store layout
+   * is unchanged.) */
+  g_assert_true (_mail_message_list_get_meta_for_test (f->list, 1)->unread);
+  g_assert_cmpstr (_mail_message_list_get_meta_for_test (f->list, 1)->id, ==, "m2");
+
+  mail_message_list_set_show_unread_only (f->list, FALSE);
+  pump_main_loop ();
+  g_assert_cmpuint (g_list_model_get_n_items (filtered), ==, 3);
+
+  /* Filter on + last unread flipped read → stack swaps to "no-unread". */
+  mail_message_list_set_show_unread_only (f->list, TRUE);
+  pump_main_loop ();
+  mail_message_list_mark_read (f->list, "m2");
+  pump_main_loop ();
+  g_assert_cmpuint (g_list_model_get_n_items (filtered), ==, 0);
+  GtkStack *stack = _mail_message_list_get_stack_for_test (f->list);
+  g_assert_cmpstr (gtk_stack_get_visible_child_name (stack), ==, "no-unread");
+
+  /* Turning the filter off restores the list page even when nothing
+   * is unread. */
+  mail_message_list_set_show_unread_only (f->list, FALSE);
+  pump_main_loop ();
+  g_assert_cmpstr (gtk_stack_get_visible_child_name (stack), ==, "list");
+}
+
 /* Pin the year-aware date formatting in the list. Backstory: the
  * subtitle column used to render every date older than today as
  * "Mon  D", so a message from 2025-02-16 and one from 2026-02-16
@@ -585,5 +638,7 @@ main (int argc,
                    test_markup_special_chars);
   g_test_add_func ("/message-list/received-date-year-aware",
                    test_received_date_year_aware);
+  g_test_add ("/message-list/unread-filter-toggles",
+              Fixture, NULL, fixture_set_up, test_unread_filter_toggles, fixture_tear_down);
   return g_test_run ();
 }

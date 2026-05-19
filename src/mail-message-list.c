@@ -68,6 +68,9 @@ struct _MailMessageList
   GtkScrolledWindow *scroller; /* borrowed; lives inside stack as the "list" page */
   GtkListView *list_view;
   GListStore *store;
+  GtkFilterListModel *filter_model; /* wraps store; feeds selection */
+  GtkCustomFilter *unread_filter;   /* borrowed; lives inside filter_model */
+  gboolean show_unread_only;
   GtkNoSelection *selection;
 
   /* Current in-flight load. We hold an owned ref to the backend's
@@ -120,6 +123,44 @@ _mail_message_list_format_received_for_test (gint64 received_unix,
                                              GDateTime *now)
 {
   return format_received_at (received_unix, now);
+}
+
+/* --- filter ----------------------------------------------------- */
+
+/* GtkCustomFilter match func. When the toggle is off, every row
+ * passes; when on, only rows whose borrowed meta has unread=TRUE.
+ * Hot path — no allocations, just a bool read from the borrowed
+ * arena pointer. */
+static gboolean
+match_unread (gpointer item, gpointer user_data)
+{
+  MailMessageList *self = user_data;
+  if (!self->show_unread_only)
+    return TRUE;
+  MailMessageRowItem *row = MAIL_MESSAGE_ROW_ITEM (item);
+  return row != NULL && row->meta != NULL && row->meta->unread;
+}
+
+/* Picks the right GtkStack page from the current store/filter state.
+ * Call after any change that can shift visibility: load completion,
+ * unread-bit flip, filter toggle. */
+static void
+update_stack_visibility (MailMessageList *self)
+{
+  guint store_n = g_list_model_get_n_items (G_LIST_MODEL (self->store));
+  if (store_n == 0)
+    {
+      gtk_stack_set_visible_child_name (self->stack, "folder-empty");
+      return;
+    }
+  if (self->show_unread_only)
+    {
+      guint visible = g_list_model_get_n_items (G_LIST_MODEL (self->filter_model));
+      gtk_stack_set_visible_child_name (self->stack,
+                                        visible > 0 ? "list" : "no-unread");
+      return;
+    }
+  gtk_stack_set_visible_child_name (self->stack, "list");
 }
 
 /* --- factory: setup/bind/unbind for recyclable row widgets ----- */
@@ -227,7 +268,10 @@ on_list_view_activate (GtkListView *list_view,
                        gpointer user_data)
 {
   MailMessageList *self = MAIL_MESSAGE_LIST (user_data);
-  g_autoptr (MailMessageRowItem) item = g_list_model_get_item (G_LIST_MODEL (self->store), position);
+  /* @position indexes the filtered model the list view sees, not the
+   * underlying store. The row GObject is the same instance in both
+   * (filter passes through, doesn't wrap). */
+  g_autoptr (MailMessageRowItem) item = g_list_model_get_item (G_LIST_MODEL (self->filter_model), position);
   if (item == NULL)
     return;
   g_signal_emit (self, signals[SIGNAL_MESSAGE_ACTIVATED], 0,
@@ -273,6 +317,10 @@ apply_unread_bit (MailMessageList *self,
       gpointer additions[] = { fresh };
       g_list_store_splice (self->store, i, 1, additions, 1);
       g_object_unref (fresh);
+      /* Filter membership of this row may have flipped; if the toggle
+       * is on and this was the last unread row, the stack page swaps
+       * to "no-unread" so the user sees something meaningful. */
+      update_stack_visibility (self);
       return;
     }
 }
@@ -285,6 +333,29 @@ mail_message_list_mark_read (MailMessageList *self,
   if (message_id == NULL)
     return;
   apply_unread_bit (self, message_id, FALSE);
+}
+
+void
+mail_message_list_set_show_unread_only (MailMessageList *self,
+                                        gboolean unread_only)
+{
+  g_return_if_fail (MAIL_IS_MESSAGE_LIST (self));
+  unread_only = !!unread_only;
+  if (self->show_unread_only == unread_only)
+    return;
+  self->show_unread_only = unread_only;
+  /* GTK_FILTER_CHANGE_DIFFERENT: predicate may now classify any row
+   * differently. Cheaper hints don't apply — toggling off lets every
+   * row through, toggling on excludes a subset. */
+  gtk_filter_changed (GTK_FILTER (self->unread_filter), GTK_FILTER_CHANGE_DIFFERENT);
+  update_stack_visibility (self);
+}
+
+gboolean
+mail_message_list_get_show_unread_only (MailMessageList *self)
+{
+  g_return_val_if_fail (MAIL_IS_MESSAGE_LIST (self), FALSE);
+  return self->show_unread_only;
 }
 
 /* MailBackendChange handler. Updates the row that matches the event,
@@ -346,8 +417,7 @@ on_messages_loaded (GObject *source,
       g_list_store_append (self->store, ri);
       g_object_unref (ri);
     }
-  gtk_stack_set_visible_child_name (self->stack,
-                                    messages->len > 0 ? "list" : "folder-empty");
+  update_stack_visibility (self);
 
   g_object_unref (self);
   g_free (ctx);
@@ -415,6 +485,13 @@ _mail_message_list_get_model_for_test (MailMessageList *self)
   return G_LIST_MODEL (self->store);
 }
 
+GListModel *
+_mail_message_list_get_filter_model_for_test (MailMessageList *self)
+{
+  g_return_val_if_fail (MAIL_IS_MESSAGE_LIST (self), NULL);
+  return G_LIST_MODEL (self->filter_model);
+}
+
 const MailMessageMeta *
 _mail_message_list_get_meta_for_test (MailMessageList *self,
                                       guint index)
@@ -447,6 +524,8 @@ mail_message_list_dispose (GObject *object)
   if (self->cancellable != NULL)
     g_cancellable_cancel (self->cancellable);
   g_clear_object (&self->cancellable);
+  g_clear_object (&self->filter_model);
+  g_clear_object (&self->unread_filter);
   g_clear_object (&self->store);
 
   GtkWidget *child;
@@ -509,6 +588,15 @@ mail_message_list_init (MailMessageList *self)
   adw_status_page_set_description (folder_empty, "This folder is empty.");
   gtk_stack_add_named (self->stack, GTK_WIDGET (folder_empty), "folder-empty");
 
+  /* "no-unread" — the folder has messages, but the unread-only filter
+   * is on and nothing matches. Wording differs from "folder-empty" so
+   * the user understands the filter is what's hiding the rows. */
+  AdwStatusPage *no_unread = ADW_STATUS_PAGE (adw_status_page_new ());
+  adw_status_page_set_icon_name (no_unread, "mail-read-symbolic");
+  adw_status_page_set_title (no_unread, "No unread messages");
+  adw_status_page_set_description (no_unread, "All caught up in this folder.");
+  gtk_stack_add_named (self->stack, GTK_WIDGET (no_unread), "no-unread");
+
   /* "list" — virtualising GtkListView inside a scroller.
    *
    * Scroller policy/propagate notes are unchanged from the GtkListBox
@@ -529,7 +617,14 @@ mail_message_list_init (MailMessageList *self)
   g_signal_connect (factory, "bind", G_CALLBACK (factory_bind), self);
   g_signal_connect (factory, "unbind", G_CALLBACK (factory_unbind), self);
 
-  self->selection = GTK_NO_SELECTION (gtk_no_selection_new (G_LIST_MODEL (g_object_ref (self->store))));
+  /* store → filter_model → selection → list_view.
+   * The filter passes everything when show_unread_only is FALSE;
+   * gtk_filter_changed() is called from the public setter to re-
+   * evaluate when the toggle flips. */
+  self->unread_filter = gtk_custom_filter_new (match_unread, self, NULL);
+  self->filter_model = gtk_filter_list_model_new (G_LIST_MODEL (g_object_ref (self->store)),
+                                                  GTK_FILTER (g_object_ref (self->unread_filter)));
+  self->selection = GTK_NO_SELECTION (gtk_no_selection_new (G_LIST_MODEL (g_object_ref (self->filter_model))));
   self->list_view = GTK_LIST_VIEW (gtk_list_view_new (GTK_SELECTION_MODEL (self->selection), factory));
   gtk_list_view_set_single_click_activate (self->list_view, TRUE);
   gtk_widget_add_css_class (GTK_WIDGET (self->list_view), "navigation-sidebar");
