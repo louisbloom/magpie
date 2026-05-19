@@ -15,7 +15,7 @@ mail_about_present (GtkWindow *parent)
   adw_about_dialog_set_developer_name (about, "Thomas Christensen");
   adw_about_dialog_set_version (about, MAGPIE_VERSION);
   adw_about_dialog_set_copyright (about, "© 2026 Thomas Christensen");
-  adw_about_dialog_set_license_type (about, GTK_LICENSE_MIT_X11);
+  adw_about_dialog_set_license_type (about, GTK_LICENSE_GPL_3_0);
   adw_about_dialog_set_issue_url (
       about, "https://gitlab.gnome.org/thomasc1971/magpie/-/issues");
 
