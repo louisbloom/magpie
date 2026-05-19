@@ -20,6 +20,14 @@ magpie_SOURCES = \
     mail-message-view.h \
     mail-mime.c \
     mail-mime.h \
+    mail-quote.c \
+    mail-quote.h \
+    mail-html-to-text.c \
+    mail-html-to-text.h \
+    mail-outbox.c \
+    mail-outbox.h \
+    mail-compose-window.c \
+    mail-compose-window.h \
     mail-imap-id.c \
     mail-imap-id.h \
     mail-imap-retry.c \
@@ -73,6 +81,7 @@ magpie_version_force:
 GRESOURCE_XML  = $(top_srcdir)/data/org.gnome.Magpie.gresource.xml
 GRESOURCE_DEPS = \
     $(top_srcdir)/data/ui/window.ui \
+    $(top_srcdir)/data/ui/compose-window.ui \
     $(top_srcdir)/data/ui/style.css
 
 mail-resources.c: $(GRESOURCE_XML) $(GRESOURCE_DEPS)
@@ -89,7 +98,8 @@ AM_CPPFLAGS = \
     $(JSON_GLIB_CFLAGS) \
     $(GMIME_CFLAGS) \
     $(SQLITE_CFLAGS) \
-    $(WEBKIT_CFLAGS)
+    $(WEBKIT_CFLAGS) \
+    $(XML_CFLAGS)
 
 magpie_LDADD = \
     $(GTK_LIBS) \
@@ -100,4 +110,5 @@ magpie_LDADD = \
     $(GMIME_LIBS) \
     $(SQLITE_LIBS) \
     $(WEBKIT_LIBS) \
+    $(XML_LIBS) \
     $(LIBETPAN_LIBS)

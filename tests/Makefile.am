@@ -1,12 +1,13 @@
 # tests/Makefile.am - Unit tests for Magpie.
 
-UNIT_TESTS = test-arena test-accounts test-sidebar test-backend-contract test-message-list test-message-view test-mime test-imap-id test-imap-retry test-store test-backend-store test-sync test-eta test-account-page test-window test-maildir-watcher test-about
+UNIT_TESTS = test-arena test-accounts test-sidebar test-backend-contract test-message-list test-message-view test-mime test-imap-id test-imap-retry test-store test-backend-store test-sync test-eta test-account-page test-window test-maildir-watcher test-about test-quote test-html-to-text test-outbox test-compose-window
 
 check_PROGRAMS = $(UNIT_TESTS)
 TESTS          = $(UNIT_TESTS)
 
 AM_CPPFLAGS = \
     -I$(top_srcdir)/src \
+    -I$(top_builddir)/src \
     $(GTK_CFLAGS) \
     $(ADWAITA_CFLAGS) \
     $(GOA_CFLAGS) \
@@ -14,7 +15,8 @@ AM_CPPFLAGS = \
     $(SOUP_CFLAGS) \
     $(GMIME_CFLAGS) \
     $(SQLITE_CFLAGS) \
-    $(WEBKIT_CFLAGS)
+    $(WEBKIT_CFLAGS) \
+    $(XML_CFLAGS)
 
 LDADD = \
     $(GTK_LIBS) \
@@ -24,7 +26,8 @@ LDADD = \
     $(SOUP_LIBS) \
     $(GMIME_LIBS) \
     $(SQLITE_LIBS) \
-    $(WEBKIT_LIBS)
+    $(WEBKIT_LIBS) \
+    $(XML_LIBS)
 
 test_arena_SOURCES    = test-arena.c $(top_srcdir)/src/mail-arena.c
 test_accounts_SOURCES = test-accounts.c
@@ -98,6 +101,62 @@ test_mime_SOURCES = \
     $(top_srcdir)/src/mail-mime.c
 
 test_mime_LDADD = $(LDADD)
+
+test_quote_SOURCES = \
+    test-quote.c \
+    $(top_srcdir)/src/mail-quote.c
+
+test_quote_LDADD = $(LDADD)
+
+test_html_to_text_SOURCES = \
+    test-html-to-text.c \
+    $(top_srcdir)/src/mail-html-to-text.c
+
+test_html_to_text_CPPFLAGS = $(AM_CPPFLAGS) $(XML_CFLAGS)
+test_html_to_text_LDADD = $(LDADD) $(XML_LIBS)
+
+test_outbox_SOURCES = \
+    test-outbox.c \
+    $(top_srcdir)/src/mail-outbox.c \
+    $(top_srcdir)/src/mail-mime.c \
+    $(top_srcdir)/src/mail-account.c \
+    $(top_srcdir)/src/mail-arena.c \
+    $(top_srcdir)/src/mail-backend.c \
+    $(top_srcdir)/src/mail-backend-store.c \
+    $(top_srcdir)/src/mail-backend-msgraph.c \
+    $(top_srcdir)/src/mail-backend-imap.c \
+    $(top_srcdir)/src/mail-imap-id.c \
+    $(top_srcdir)/src/mail-imap-retry.c \
+    $(top_srcdir)/src/mail-maildir-watcher.c \
+    $(top_srcdir)/src/mail-store.c \
+    $(top_srcdir)/src/mail-sync.c
+
+test_outbox_LDADD = $(LDADD) $(LIBETPAN_LIBS)
+
+# Compose dialog uses the embedded gresource bundle for its template,
+# so we link against the production mail-resources.c that src/ builds.
+test_compose_window_SOURCES = \
+    test-compose-window.c \
+    $(top_srcdir)/src/mail-compose-window.c \
+    $(top_srcdir)/src/mail-outbox.c \
+    $(top_srcdir)/src/mail-html-to-text.c \
+    $(top_srcdir)/src/mail-quote.c \
+    $(top_srcdir)/src/mail-mime.c \
+    $(top_srcdir)/src/mail-account.c \
+    $(top_srcdir)/src/mail-arena.c \
+    $(top_srcdir)/src/mail-backend.c \
+    $(top_srcdir)/src/mail-backend-store.c \
+    $(top_srcdir)/src/mail-backend-msgraph.c \
+    $(top_srcdir)/src/mail-backend-imap.c \
+    $(top_srcdir)/src/mail-imap-id.c \
+    $(top_srcdir)/src/mail-imap-retry.c \
+    $(top_srcdir)/src/mail-maildir-watcher.c \
+    $(top_srcdir)/src/mail-store.c \
+    $(top_srcdir)/src/mail-sync.c
+
+test_compose_window_CPPFLAGS = $(AM_CPPFLAGS)
+test_compose_window_LDADD = $(top_builddir)/src/mail-resources.$(OBJEXT) $(LDADD) $(LIBETPAN_LIBS)
+test_compose_window_DEPENDENCIES = $(top_builddir)/src/mail-resources.$(OBJEXT)
 
 test_imap_id_SOURCES = \
     test-imap-id.c \

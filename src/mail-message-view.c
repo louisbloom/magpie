@@ -110,6 +110,7 @@ enum
 {
   PROP_0,
   PROP_HAS_PLAIN_PART,
+  PROP_HAS_RAW,
   PROP_VIEW_MODE,
   N_PROPS,
 };
@@ -291,6 +292,7 @@ on_fetch_done (GObject *source,
   render (self);
 
   g_object_notify_by_pspec (G_OBJECT (self), props[PROP_HAS_PLAIN_PART]);
+  g_object_notify_by_pspec (G_OBJECT (self), props[PROP_HAS_RAW]);
   if (prev_mode != MAIL_MESSAGE_VIEW_MODE_RENDERED)
     g_object_notify_by_pspec (G_OBJECT (self), props[PROP_VIEW_MODE]);
 
@@ -321,6 +323,13 @@ mail_message_view_load (MailMessageView *self,
                                         on_fetch_done, ctx);
 }
 
+GBytes *
+mail_message_view_peek_raw (MailMessageView *self)
+{
+  g_return_val_if_fail (MAIL_IS_MESSAGE_VIEW (self), NULL);
+  return self->raw_bytes;
+}
+
 GtkWidget *
 mail_message_view_new (void)
 {
@@ -338,6 +347,9 @@ mail_message_view_get_property (GObject *object,
     {
     case PROP_HAS_PLAIN_PART:
       g_value_set_boolean (value, self->plain_text != NULL);
+      break;
+    case PROP_HAS_RAW:
+      g_value_set_boolean (value, self->raw_bytes != NULL);
       break;
     case PROP_VIEW_MODE:
       g_value_set_enum (value, self->mode);
@@ -452,6 +464,10 @@ mail_message_view_class_init (MailMessageViewClass *klass)
                                                      NULL, NULL,
                                                      FALSE,
                                                      G_PARAM_READABLE | G_PARAM_STATIC_STRINGS);
+  props[PROP_HAS_RAW] = g_param_spec_boolean ("has-raw",
+                                              NULL, NULL,
+                                              FALSE,
+                                              G_PARAM_READABLE | G_PARAM_STATIC_STRINGS);
   props[PROP_VIEW_MODE] = g_param_spec_enum ("view-mode",
                                              NULL, NULL,
                                              MAIL_TYPE_MESSAGE_VIEW_MODE,

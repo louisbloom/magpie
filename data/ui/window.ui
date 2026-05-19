@@ -91,6 +91,13 @@
                               </object>
                             </child>
                             <child type="end">
+                              <object class="GtkButton" id="reply_button">
+                                <property name="icon-name">mail-reply-sender-symbolic</property>
+                                <property name="tooltip-text" translatable="yes">Reply</property>
+                                <property name="sensitive">false</property>
+                              </object>
+                            </child>
+                            <child type="end">
                               <object class="AdwToggleGroup" id="view_mode_group">
                                 <style>
                                   <class name="round"/>

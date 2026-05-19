@@ -380,6 +380,108 @@ test_pick_empty_input (void)
   g_assert_null (detail);
 }
 
+/* --- mail_mime_extract_reply_source ----------------------------- */
+
+static void
+test_reply_source_headers (void)
+{
+  static const char raw[] =
+      "From: Alice Example <alice@example.com>\r\n"
+      "To: bob@example.com\r\n"
+      "Subject: Hello there\r\n"
+      "Message-ID: <abc123@example.com>\r\n"
+      "References: <prev1@example.com> <prev2@example.com>\r\n"
+      "In-Reply-To: <prev2@example.com>\r\n"
+      "Content-Type: text/plain; charset=utf-8\r\n"
+      "\r\n"
+      "body\r\n";
+  MailMimeReplySource *src = mail_mime_extract_reply_source ((const guint8 *) raw, sizeof raw - 1);
+  g_assert_nonnull (src);
+  g_assert_cmpstr (src->from_name, ==, "Alice Example");
+  g_assert_cmpstr (src->from_addr, ==, "alice@example.com");
+  g_assert_cmpstr (src->subject, ==, "Hello there");
+  g_assert_cmpstr (src->message_id, ==, "abc123@example.com");
+  g_assert_nonnull (src->references);
+  g_assert_true (strstr (src->references, "prev1@example.com") != NULL);
+  g_assert_true (strstr (src->references, "prev2@example.com") != NULL);
+  g_assert_nonnull (src->in_reply_to);
+  g_assert_true (strstr (src->in_reply_to, "prev2@example.com") != NULL);
+  g_assert_cmpstr (src->body_plain, ==, "body\r\n");
+  mail_mime_reply_source_free (src);
+}
+
+static void
+test_reply_source_reply_to (void)
+{
+  static const char raw[] =
+      "From: Alice <alice@example.com>\r\n"
+      "Reply-To: list@example.com\r\n"
+      "Subject: t\r\n"
+      "Content-Type: text/plain; charset=utf-8\r\n"
+      "\r\n"
+      "x\r\n";
+  MailMimeReplySource *src = mail_mime_extract_reply_source ((const guint8 *) raw, sizeof raw - 1);
+  g_assert_nonnull (src);
+  g_assert_cmpstr (src->reply_to_addr, ==, "list@example.com");
+  g_assert_cmpstr (src->from_addr, ==, "alice@example.com");
+  mail_mime_reply_source_free (src);
+}
+
+static void
+test_reply_source_picks_plain_over_html (void)
+{
+  /* Both parts present — body_plain wins, body_html still populated
+   * (caller may want to fall back to it). */
+  static const char raw[] =
+      "From: a@x\r\n"
+      "Subject: t\r\n"
+      "MIME-Version: 1.0\r\n"
+      "Content-Type: multipart/alternative; boundary=\"B\"\r\n"
+      "\r\n"
+      "--B\r\n"
+      "Content-Type: text/plain; charset=utf-8\r\n"
+      "\r\n"
+      "plain version\r\n"
+      "--B\r\n"
+      "Content-Type: text/html; charset=utf-8\r\n"
+      "\r\n"
+      "<p>HTML version</p>\r\n"
+      "--B--\r\n";
+  MailMimeReplySource *src = mail_mime_extract_reply_source ((const guint8 *) raw, sizeof raw - 1);
+  g_assert_nonnull (src);
+  g_assert_nonnull (src->body_plain);
+  g_assert_true (strstr (src->body_plain, "plain version") != NULL);
+  g_assert_nonnull (src->body_html);
+  g_assert_true (strstr (src->body_html, "<p>HTML version</p>") != NULL);
+  mail_mime_reply_source_free (src);
+}
+
+static void
+test_reply_source_html_only (void)
+{
+  static const char raw[] =
+      "From: a@x\r\n"
+      "Subject: t\r\n"
+      "Content-Type: text/html; charset=utf-8\r\n"
+      "\r\n"
+      "<p>only html</p>\r\n";
+  MailMimeReplySource *src = mail_mime_extract_reply_source ((const guint8 *) raw, sizeof raw - 1);
+  g_assert_nonnull (src);
+  g_assert_null (src->body_plain);
+  g_assert_nonnull (src->body_html);
+  g_assert_true (strstr (src->body_html, "<p>only html</p>") != NULL);
+  mail_mime_reply_source_free (src);
+}
+
+static void
+test_reply_source_null (void)
+{
+  MailMimeReplySource *src = mail_mime_extract_reply_source (NULL, 0);
+  g_assert_null (src);
+  /* Free of NULL is a no-op. */
+  mail_mime_reply_source_free (NULL);
+}
+
 int
 main (int argc,
       char *argv[])
@@ -410,6 +512,13 @@ main (int argc,
   g_test_add_func ("/mime/pick/nested-mixed-alternative",
                    test_pick_nested_mixed_alternative);
   g_test_add_func ("/mime/pick/empty-input", test_pick_empty_input);
+
+  g_test_add_func ("/mime/reply-source/headers", test_reply_source_headers);
+  g_test_add_func ("/mime/reply-source/reply-to", test_reply_source_reply_to);
+  g_test_add_func ("/mime/reply-source/picks-plain-over-html",
+                   test_reply_source_picks_plain_over_html);
+  g_test_add_func ("/mime/reply-source/html-only", test_reply_source_html_only);
+  g_test_add_func ("/mime/reply-source/null", test_reply_source_null);
 
   return g_test_run ();
 }

@@ -66,4 +66,30 @@ MailMimeKind mail_mime_pick_best (const guint8 *raw, gsize len, gchar **content_
  */
 gchar *mail_mime_extract_text_plain (const guint8 *raw, gsize len);
 
+/* Headers and body the compose dialog needs to build a reply. */
+typedef struct
+{
+  gchar *from_name;     /* display name, may be NULL */
+  gchar *from_addr;     /* mailbox addr, may be NULL */
+  gchar *reply_to_addr; /* Reply-To mailbox addr, may be NULL */
+  gchar *subject;       /* may be NULL */
+  gchar *message_id;    /* without enclosing <>, may be NULL */
+  gchar *references;    /* raw header value, may be NULL */
+  gchar *in_reply_to;   /* raw header value, may be NULL */
+
+  /* Body. Either or both may be NULL.
+   *
+   *   body_plain — decoded text/plain (preferred for quoting).
+   *   body_html  — decoded text/html  (use only when plain is NULL). */
+  gchar *body_plain;
+  gchar *body_html;
+} MailMimeReplySource;
+
+/* Parse `raw` and extract the fields needed to build a reply. Returns
+ * NULL on parse failure. All strings inside the returned struct are
+ * owned by it; free with mail_mime_reply_source_free(). */
+MailMimeReplySource *mail_mime_extract_reply_source (const guint8 *raw, gsize len);
+
+void mail_mime_reply_source_free (MailMimeReplySource *src);
+
 G_END_DECLS

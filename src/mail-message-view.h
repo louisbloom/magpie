@@ -33,4 +33,10 @@ void mail_message_view_load (MailMessageView *self,
                              MailBackend *backend,
                              const char *message_id);
 
+/* Borrow the currently-loaded raw RFC 5322 bytes, or NULL if no
+ * message has been loaded (or the last load is still in-flight). The
+ * returned GBytes is owned by the view; ref it if you need to outlive
+ * the next load. */
+GBytes *mail_message_view_peek_raw (MailMessageView *self);
+
 G_END_DECLS

@@ -57,6 +57,7 @@ PKG_CHECK_MODULES([JSON_GLIB], [json-glib-1.0 >= 1.6])
 PKG_CHECK_MODULES([GMIME],     [gmime-3.0 >= 3.2])
 PKG_CHECK_MODULES([SQLITE],    [sqlite3 >= 3.24])
 PKG_CHECK_MODULES([WEBKIT],    [webkitgtk-6.0 >= 2.44])
+PKG_CHECK_MODULES([XML],       [libxml-2.0 >= 2.9])
 
 dnl libetpan has no pkg-config file; probe it via AC_CHECK_LIB.
 AC_CHECK_HEADER([libetpan/libetpan.h], [],

@@ -123,6 +123,38 @@ find_plain_in_alternative (GMimeObject *obj)
   return NULL;
 }
 
+/* Pass 2: first text/html anywhere in the tree. Mirror of find_any_plain
+ * for the reply-source extractor's fallback. */
+static GMimeObject *
+find_any_html (GMimeObject *obj)
+{
+  if (obj == NULL)
+    return NULL;
+
+  if (GMIME_IS_MULTIPART (obj))
+    {
+      GMimeMultipart *mp = (GMimeMultipart *) obj;
+      int n = g_mime_multipart_get_count (mp);
+      for (int i = 0; i < n; i++)
+        {
+          GMimeObject *hit = find_any_html (g_mime_multipart_get_part (mp, i));
+          if (hit != NULL)
+            return hit;
+        }
+      return NULL;
+    }
+
+  if (GMIME_IS_MESSAGE_PART (obj))
+    {
+      GMimeMessage *inner = g_mime_message_part_get_message ((GMimeMessagePart *) obj);
+      if (inner != NULL)
+        return find_any_html (g_mime_message_get_mime_part (inner));
+      return NULL;
+    }
+
+  return is_text_html (obj) ? obj : NULL;
+}
+
 /* Pass 2: first text/plain anywhere in the tree. */
 static GMimeObject *
 find_any_plain (GMimeObject *obj)
@@ -367,4 +399,142 @@ mail_mime_extract_text_plain (const guint8 *raw, gsize len)
 
   g_object_unref (msg);
   return result;
+}
+
+/* --- reply source extraction ------------------------------------- */
+
+/* Extract the first mailbox from an InternetAddressList into name/addr
+ * out-params (newly-allocated, caller g_frees). Both out-params may be
+ * NULL on return if the list is empty or contains no mailboxes. */
+static void
+first_mailbox (InternetAddressList *list, gchar **name_out, gchar **addr_out)
+{
+  if (list == NULL)
+    return;
+  int n = internet_address_list_length (list);
+  for (int i = 0; i < n; i++)
+    {
+      InternetAddress *ia = internet_address_list_get_address (list, i);
+      if (!INTERNET_ADDRESS_IS_MAILBOX (ia))
+        continue;
+      const char *name = internet_address_get_name (ia);
+      const char *addr = internet_address_mailbox_get_addr (INTERNET_ADDRESS_MAILBOX (ia));
+      if (name != NULL && name[0] != '\0')
+        *name_out = g_strdup (name);
+      if (addr != NULL && addr[0] != '\0')
+        *addr_out = g_strdup (addr);
+      return;
+    }
+}
+
+/* Strip enclosing <...> from a raw Message-Id header value. */
+static gchar *
+unwrap_msgid (const char *raw)
+{
+  if (raw == NULL)
+    return NULL;
+  while (*raw == ' ' || *raw == '\t')
+    raw++;
+  if (raw[0] != '<')
+    return g_strdup (raw);
+  const char *end = strchr (raw, '>');
+  if (end == NULL)
+    return g_strdup (raw + 1);
+  return g_strndup (raw + 1, (gsize) (end - raw - 1));
+}
+
+MailMimeReplySource *
+mail_mime_extract_reply_source (const guint8 *raw, gsize len)
+{
+  if (raw == NULL || len == 0)
+    return NULL;
+
+  ensure_gmime_init ();
+
+  GMimeStream *stream = g_mime_stream_mem_new_with_buffer ((const char *) raw, len);
+  if (stream == NULL)
+    return NULL;
+
+  GMimeParser *parser = g_mime_parser_new_with_stream (stream);
+  g_object_unref (stream);
+  if (parser == NULL)
+    return NULL;
+
+  GMimeMessage *msg = g_mime_parser_construct_message (parser, NULL);
+  g_object_unref (parser);
+  if (msg == NULL)
+    return NULL;
+
+  MailMimeReplySource *src = g_new0 (MailMimeReplySource, 1);
+
+  first_mailbox (g_mime_message_get_from (msg), &src->from_name, &src->from_addr);
+
+  {
+    gchar *unused = NULL;
+    first_mailbox (g_mime_message_get_reply_to (msg), &unused, &src->reply_to_addr);
+    g_free (unused);
+  }
+
+  {
+    const char *s = g_mime_message_get_subject (msg);
+    if (s != NULL)
+      src->subject = g_strdup (s);
+  }
+  {
+    const char *id = g_mime_message_get_message_id (msg);
+    if (id != NULL && id[0] != '\0')
+      src->message_id = g_strdup (id);
+  }
+  {
+    GMimeObject *obj = (GMimeObject *) msg;
+    const char *refs = g_mime_object_get_header (obj, "References");
+    if (refs != NULL)
+      src->references = g_strdup (refs);
+    const char *irt = g_mime_object_get_header (obj, "In-Reply-To");
+    if (irt != NULL)
+      src->in_reply_to = g_strdup (irt);
+    /* GMime decodes Message-Id without <>; if our header is missing
+     * (very old mail), fall back to the raw header parse. */
+    if (src->message_id == NULL)
+      {
+        const char *mid = g_mime_object_get_header (obj, "Message-Id");
+        if (mid != NULL)
+          src->message_id = unwrap_msgid (mid);
+      }
+  }
+
+  GMimeObject *root = g_mime_message_get_mime_part (msg);
+
+  {
+    GMimeObject *plain = find_plain_in_alternative (root);
+    if (plain == NULL)
+      plain = find_any_plain (root);
+    if (plain != NULL)
+      src->body_plain = decode_text_utf8 (plain);
+  }
+  {
+    GMimeObject *html = find_any_html (root);
+    if (html != NULL)
+      src->body_html = decode_text_utf8 (html);
+  }
+
+  g_object_unref (msg);
+  return src;
+}
+
+void
+mail_mime_reply_source_free (MailMimeReplySource *src)
+{
+  if (src == NULL)
+    return;
+  g_free (src->from_name);
+  g_free (src->from_addr);
+  g_free (src->reply_to_addr);
+  g_free (src->subject);
+  g_free (src->message_id);
+  g_free (src->references);
+  g_free (src->in_reply_to);
+  g_free (src->body_plain);
+  g_free (src->body_html);
+  g_free (src);
 }

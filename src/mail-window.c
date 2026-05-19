@@ -4,6 +4,7 @@
 
 #include "mail-account-page.h"
 #include "mail-account.h"
+#include "mail-compose-window.h"
 #include "mail-message-list.h"
 #include "mail-message-view.h"
 #include "mail-sidebar.h"
@@ -26,6 +27,7 @@ struct _MailWindow
   AdwWindowTitle *message_list_title;
   AdwNavigationPage *message_view_page;
   AdwToggleGroup *view_mode_group;
+  GtkButton *reply_button;
 
   /* Added programmatically. */
   MailAccountPage *account_page;
@@ -426,6 +428,21 @@ mail_window_class_init (MailWindowClass *klass)
   gtk_widget_class_bind_template_child (widget_class, MailWindow, message_list_title);
   gtk_widget_class_bind_template_child (widget_class, MailWindow, message_view_page);
   gtk_widget_class_bind_template_child (widget_class, MailWindow, view_mode_group);
+  gtk_widget_class_bind_template_child (widget_class, MailWindow, reply_button);
+}
+
+static void
+on_reply_clicked (GtkButton *button, MailWindow *self)
+{
+  (void) button;
+  GBytes *raw = mail_message_view_peek_raw (self->message_view);
+  if (raw == NULL || self->current_account == NULL)
+    return;
+
+  GtkWidget *dialog = mail_compose_window_new_reply (self->current_account, raw);
+  if (dialog == NULL)
+    return;
+  adw_dialog_present (ADW_DIALOG (dialog), GTK_WIDGET (self));
 }
 
 static void
@@ -451,6 +468,9 @@ mail_window_init (MailWindow *self)
                                G_BINDING_BIDIRECTIONAL | G_BINDING_SYNC_CREATE,
                                view_mode_to_name, name_to_view_mode,
                                NULL, NULL);
+  g_object_bind_property (self->message_view, "has-raw",
+                          self->reply_button, "sensitive",
+                          G_BINDING_SYNC_CREATE);
   g_signal_connect (self->message_view, "notify::has-plain-part",
                     G_CALLBACK (on_has_plain_part_notify), self);
   on_has_plain_part_notify (G_OBJECT (self->message_view), NULL, self);
@@ -474,6 +494,9 @@ mail_window_init (MailWindow *self)
                     G_CALLBACK (on_account_added), self);
   g_signal_connect (self->account_page, "sync-requested",
                     G_CALLBACK (on_sync_requested), self);
+
+  g_signal_connect (self->reply_button, "clicked",
+                    G_CALLBACK (on_reply_clicked), self);
 }
 
 MailWindow *
