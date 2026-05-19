@@ -24,9 +24,11 @@ and their flag changes propagate to magpie's UI in real time via a
 per-folder `GFileMonitor`.
 
 The scope is deliberately narrow at this stage: browse the folders of
-your configured accounts, trigger and watch syncs, and read messages
+your configured accounts, trigger and watch syncs, read messages
 (MIME-aware: HTML in WebKit by default, with toggles for the
-text/plain alternative and the raw RFC822 source). Sending, search,
+text/plain alternative and the raw RFC822 source), and reply with a
+Gnus-style quoted draft. SMTP send is not wired yet — Send currently
+appends to a debug `Outbox.mbox` in the account root. Search,
 threading, and push notifications are explicit follow-ups, not
 held-back features.
 
@@ -102,16 +104,20 @@ Early prototype. The current shape:
   ballooon on widescreen displays.
 - **Right pane.** Three pages routed through `AdwNavigationView`: the
   message list (a virtualizing `GtkListView` over the local store, so
-  10k-row folders open instantly and scroll smoothly), the message
-  viewer (pushed on row activation, with an `AdwToggleGroup` in the
-  header bar exposing three exclusive view modes — _Rendered_ (HTML in
-  a sandboxed `WebKitWebView` or the text/plain alternative, per
-  RFC 2046 §5.1.4), _Plain_ (forced text/plain alternative; insensitive
-  when none exists), and _Source_ (raw RFC822). Unsupported content
-  types surface an `AdwStatusPage` placeholder instead of dumping
-  binary), and the account page (shown when an account row is
-  selected, or auto-switched-to when a sync starts on the current
-  account).
+  10k-row folders open instantly and scroll smoothly; the header bar
+  carries an unread-only filter toggle that hides read mail without
+  reloading), the message viewer (pushed on row activation, with an
+  `AdwToggleGroup` in the header bar exposing three exclusive view
+  modes — _Rendered_ (HTML in a sandboxed `WebKitWebView` or the
+  text/plain alternative, per RFC 2046 §5.1.4), _Plain_ (forced
+  text/plain alternative; insensitive when none exists), and _Source_
+  (raw RFC822). Unsupported content types surface an `AdwStatusPage`
+  placeholder instead of dumping binary. A Reply button opens an
+  `AdwDialog` compose window pre-filled Gnus-style — attribution line
+  plus `> `-quoted text/plain body, or HTML→text fallback when no
+  plain alternative exists), and the account page (shown when an
+  account row is selected, or auto-switched-to when a sync starts on
+  the current account).
 - **Account page.** `AdwStatusPage`-based body with a "Sync now" button
   in the idle state; during a pass the same slot shows a centered
   progress ring, a live status line, a sliding-window ETA ("About 3
@@ -150,20 +156,21 @@ Early prototype. The current shape:
   initial-sync's per-message round-trip cost amortises into a
   near-constant overhead. Selection is per-account via
   GOA's reported provider type.
-- **Tests.** Sixteen test binaries under `tests/`, running under
-  `gtk_test_init` where they touch widgets: `test-arena`,
-  `test-accounts`, `test-sidebar`, `test-backend-contract`,
-  `test-message-list`, `test-message-view`, `test-mime`,
-  `test-imap-id`, `test-imap-retry`, `test-store`,
-  `test-backend-store`, `test-sync`, `test-eta`, `test-account-page`,
-  `test-window`, `test-maildir-watcher`. Every bug fix lands with a
+- **Tests.** Twenty-one test binaries under `tests/`, running under
+  `gtk_test_init` where they touch widgets: `test-about`,
+  `test-account-page`, `test-accounts`, `test-arena`,
+  `test-backend-contract`, `test-backend-store`, `test-compose-window`,
+  `test-eta`, `test-html-to-text`, `test-imap-id`, `test-imap-retry`,
+  `test-maildir-watcher`, `test-message-list`, `test-message-view`,
+  `test-mime`, `test-outbox`, `test-quote`, `test-sidebar`,
+  `test-store`, `test-sync`, `test-window`. Every bug fix lands with a
   regression test (see the principles).
 
 ## Build
 
 ```sh
 sudo dnf install gnome-online-accounts-devel libsoup3-devel \
-                 json-glib-devel libetpan-devel libsecret-devel \
+                 json-glib-devel libetpan-devel libxml2-devel \
                  gtk4-devel libadwaita-devel gmime30-devel \
                  sqlite-devel webkitgtk6.0-devel
 
