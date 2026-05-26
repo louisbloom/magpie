@@ -379,7 +379,7 @@ on_list_folders_done (GObject *source,
 
   /* Now that we know which folders exist, arm the maildir watcher for
    * each one. watch_folder runs an initial reconcile synchronously, so
-   * any drift between sessions (mutt mark-read while magpie was off)
+   * any drift between sessions (mutt mark-read while spool was off)
    * is corrected in sqlite and FOLDER_COUNTS is emitted; the badges
    * we just inserted will pick up the corrected counts via the
    * normal signal handler on the next loop iteration. */
@@ -657,7 +657,7 @@ on_sidebar_realize (GtkWidget *widget,
 /* Pinned branding strip shown above the scroller. Icon + name follow
  * the same left-aligned column as the account/folder rows below
  * (xalign=0.0 matches sidebar_account_row's title at line ~178), so
- * the user reads "this is Magpie, here are your accounts" as one
+ * the user reads "this is Spool, here are your accounts" as one
  * visual axis.
  *
  * Height is pinned to BRANDING_STRIP_HEIGHT_PX so the strip lines up
@@ -676,12 +676,12 @@ build_branding_strip (void)
   gtk_widget_set_margin_end (hbox, 12);
   gtk_widget_set_size_request (hbox, -1, BRANDING_STRIP_HEIGHT_PX);
 
-  GtkWidget *icon = gtk_image_new_from_icon_name ("org.gnome.Magpie");
+  GtkWidget *icon = gtk_image_new_from_icon_name ("org.gnome.Spool");
   gtk_image_set_pixel_size (GTK_IMAGE (icon), 24);
   gtk_widget_set_valign (icon, GTK_ALIGN_CENTER);
   gtk_box_append (GTK_BOX (hbox), icon);
 
-  GtkWidget *label = gtk_label_new ("Magpie");
+  GtkWidget *label = gtk_label_new ("Spool");
   gtk_label_set_xalign (GTK_LABEL (label), 0.0);
   gtk_widget_add_css_class (label, "title-4");
   gtk_widget_set_hexpand (label, TRUE);

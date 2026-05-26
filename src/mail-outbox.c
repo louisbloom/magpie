@@ -141,7 +141,7 @@ build_message (MailAccount *account,
   {
     char hostname[256];
     if (gethostname (hostname, sizeof hostname) != 0)
-      g_strlcpy (hostname, "magpie.local", sizeof hostname);
+      g_strlcpy (hostname, "spool.local", sizeof hostname);
     hostname[sizeof hostname - 1] = '\0';
     g_autofree char *mid = g_mime_utils_generate_message_id (hostname);
     g_mime_message_set_message_id (msg, mid);
@@ -225,7 +225,7 @@ mail_outbox_append (MailAccount *account,
   g_autoptr (GString) escaped = mboxrd_escape (serialized->str);
 
   g_autofree char *envelope_date = mbox_envelope_date ();
-  g_autofree char *envelope = g_strdup_printf ("From magpie@localhost %s\n", envelope_date);
+  g_autofree char *envelope = g_strdup_printf ("From spool@localhost %s\n", envelope_date);
 
   int fd = open (path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
   if (fd < 0)

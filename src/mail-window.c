@@ -417,7 +417,7 @@ mail_window_class_init (MailWindowClass *klass)
   g_type_ensure (MAIL_TYPE_MESSAGE_VIEW);
 
   gtk_widget_class_set_template_from_resource (widget_class,
-                                               "/org/gnome/Magpie/ui/window.ui");
+                                               "/org/gnome/Spool/ui/window.ui");
   gtk_widget_class_bind_template_child (widget_class, MailWindow, split_view);
   gtk_widget_class_bind_template_child (widget_class, MailWindow, nav_view);
   gtk_widget_class_bind_template_child (widget_class, MailWindow, sidebar_toggle);

@@ -1,4 +1,4 @@
-# Makefile.am - Top-level automake file for Magpie
+# Makefile.am - Top-level automake file for Spool
 
 SUBDIRS = src data tests
 

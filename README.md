@@ -1,6 +1,8 @@
-# Magpie
+# Spool
 
-A native GNOME mail client. C + GTK4 + libadwaita, built on top of
+Spool is a native GNOME mail client under the `bloom` umbrella —
+alongside `bloom-boba`, `bloom-lisp`, `bloom-vt`, `bloom-terminal`,
+and `bloom-telnet`. C + GTK4 + libadwaita, built on top of
 `GNOME Online Accounts` for account discovery, with provider-specific
 backends for Microsoft Graph and IMAP.
 
@@ -8,19 +10,19 @@ backends for Microsoft Graph and IMAP.
 
 A fast, HIG-correct mail reader that fits the GNOME desktop the same
 way Files, Calendar, or Contacts do — no Electron, no JavaScript, no
-per-provider GUI quirks. Accounts come from your GOA session; Magpie
+per-provider GUI quirks. Accounts come from your GOA session; Spool
 discovers them, syncs each account's messages to a local Maildir +
 sqlite index, and renders the result with stock libadwaita widgets.
 
 ### Your mail stays on disk, in a format other tools understand
 
 Storage is local-first (mutt / gnus-style). Each account's messages
-live under `~/Mail/<identity>/` as a regular Maildir tree, and Magpie's
+live under `~/Mail/<identity>/` as a regular Maildir tree, and Spool's
 UI always reads from disk. Remote providers are contacted only when
 you explicitly trigger a sync from the account page. The on-disk
-Maildir is authoritative — point mutt or another Magpie instance at
+Maildir is authoritative — point mutt or another Spool instance at
 the same `~/Mail` and everything interoperates cleanly. If mutt marks
-a message read while Magpie is open, the boldness drops off the row in
+a message read while Spool is open, the boldness drops off the row in
 real time; the reverse holds too.
 
 ### What you can do today
@@ -46,11 +48,11 @@ real time; the reverse holds too.
   "Sync now" in the idle state, a centered progress ring with a live
   status line, a sliding-window ETA ("About 3 minutes remaining"), and
   a Cancel button while a pass is running.
-- **Live disk updates.** Reading a mail in Magpie, or marking it read
+- **Live disk updates.** Reading a mail in Spool, or marking it read
   in a parallel mutt session, both flip the sidebar unread badge and
   the row boldness in the same frame. A per-account watcher with a
   120 ms debounce reconciles disk → sqlite drift in real time and at
-  startup, so changes accumulated while Magpie was closed are picked
+  startup, so changes accumulated while Spool was closed are picked
   up before you click anything.
 
 Providers covered: Microsoft Graph (Outlook / Office 365) and IMAP via
@@ -59,7 +61,7 @@ on what GOA reports.
 
 ### What's not in yet
 
-Magpie is an early prototype. SMTP send is not wired — the Send button
+Spool is an early prototype. SMTP send is not wired — the Send button
 in the compose dialog appends to a debug `Outbox.mbox` in the account
 root so you can read your draft back with mutt or `less`. Search,
 threading, and push notifications are explicit follow-ups, not
@@ -67,7 +69,7 @@ held-back features.
 
 ### Install and run
 
-Magpie ships as source. On Fedora:
+Spool ships as source. On Fedora:
 
 ```sh
 sudo dnf install gnome-online-accounts-devel libsoup3-devel \
@@ -80,11 +82,11 @@ mkdir -p build && cd build
 ../configure --prefix=$HOME/.local --enable-debug
 make -j$(nproc)
 make install
-magpie
+spool
 ```
 
 Configure your mail accounts in GNOME Settings → Online Accounts
-first; Magpie picks them up automatically.
+first; Spool picks them up automatically.
 
 ## For contributors
 
@@ -93,7 +95,15 @@ first; Magpie picks them up automatically.
 These guide every code-level decision in the repo. They're listed first
 because they're how to evaluate a change, not just describe one.
 
-- **Native GNOME, not a port.** `org.gnome.Magpie` app id, GTK4 widgets,
+- **Charm.land identity, bloom umbrella.** The project name, CLI
+  binary, and documentation voice follow charm.land's short,
+  function-rooted naming aesthetic, and sit alongside the rest of
+  the `bloom` family (`bloom-boba`, `bloom-lisp`, `bloom-vt`,
+  `bloom-terminal`, `bloom-telnet`). The visible UI is **not**
+  charm.land — it follows the GNOME HIG exactly, per the next
+  bullet. When the two pull in different directions, the HIG wins.
+
+- **Native GNOME, not a port.** `org.gnome.Spool` app id, GTK4 widgets,
   libadwaita layout primitives (`AdwOverlaySplitView`,
   `AdwNavigationView`, `AdwHeaderBar`, `AdwWindowTitle`,
   `AdwStatusPage`). The HIG is the reference; if a behaviour clashes
@@ -168,7 +178,7 @@ because they're how to evaluate a change, not just describe one.
   with a 120 ms debounce; watcher events run the disk → sqlite
   reconciler, which emits the same events as the local mark-read
   path. The reconciler also runs once at startup so drift accumulated
-  while Magpie was closed is corrected before the user clicks anything.
+  while Spool was closed is corrected before the user clicks anything.
 - **Providers.** Microsoft Graph (functional, with `@odata.nextLink`
   pagination); IMAP via libetpan with SASL XOAUTH2 (Gmail tested),
   with cross-folder body deduplication keyed on the RFC 5322
@@ -191,7 +201,7 @@ mkdir -p build && cd build
 ../configure --prefix=$HOME/.local --enable-debug
 make -j$(nproc)
 make check
-./src/magpie
+./src/spool
 ```
 
 ### Tests

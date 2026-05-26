@@ -542,7 +542,7 @@ find_label_by_text (GtkWidget *root,
   return NULL;
 }
 
-/* Regression: the sidebar shows app branding (icon + "Magpie") at the
+/* Regression: the sidebar shows app branding (icon + "Spool") at the
  * top, left-aligned. Previously the sidebar carried an empty
  * AdwHeaderBar that was removed in commit a775bdb; this test pins the
  * subsequent reintroduction so an accidental future drop is caught. */
@@ -552,10 +552,10 @@ test_sidebar_shows_branding (void)
   MailSidebar *sb = MAIL_SIDEBAR (mail_sidebar_new ());
   g_object_ref_sink (sb);
 
-  GtkImage *icon = find_image_by_icon_name (GTK_WIDGET (sb), "org.gnome.Magpie");
+  GtkImage *icon = find_image_by_icon_name (GTK_WIDGET (sb), "org.gnome.Spool");
   g_assert_nonnull (icon);
 
-  GtkLabel *label = find_label_by_text (GTK_WIDGET (sb), "Magpie");
+  GtkLabel *label = find_label_by_text (GTK_WIDGET (sb), "Spool");
   g_assert_nonnull (label);
   /* Left-aligned along the same x-axis as account/folder row titles. */
   g_assert_cmpfloat (gtk_label_get_xalign (label), ==, 0.0f);

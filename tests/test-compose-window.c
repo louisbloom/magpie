@@ -25,7 +25,7 @@ static void
 fixture_set_up (Fixture *fx, gconstpointer unused)
 {
   (void) unused;
-  fx->root = g_dir_make_tmp ("magpie-compose-XXXXXX", NULL);
+  fx->root = g_dir_make_tmp ("spool-compose-XXXXXX", NULL);
   g_assert_nonnull (fx->root);
 
   fx->home_orig = g_strdup (g_getenv ("HOME"));

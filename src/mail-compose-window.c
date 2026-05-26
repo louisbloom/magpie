@@ -122,7 +122,7 @@ mail_compose_window_class_init (MailComposeWindowClass *klass)
 
   object_class->dispose = mail_compose_window_dispose;
 
-  gtk_widget_class_set_template_from_resource (widget_class, "/org/gnome/Magpie/ui/compose-window.ui");
+  gtk_widget_class_set_template_from_resource (widget_class, "/org/gnome/Spool/ui/compose-window.ui");
   gtk_widget_class_bind_template_child (widget_class, MailComposeWindow, to_row);
   gtk_widget_class_bind_template_child (widget_class, MailComposeWindow, subject_row);
   gtk_widget_class_bind_template_child (widget_class, MailComposeWindow, body_view);

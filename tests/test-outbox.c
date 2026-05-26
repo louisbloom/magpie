@@ -26,7 +26,7 @@ static void
 fixture_set_up (Fixture *fx, gconstpointer unused)
 {
   (void) unused;
-  fx->root = g_dir_make_tmp ("magpie-outbox-XXXXXX", NULL);
+  fx->root = g_dir_make_tmp ("spool-outbox-XXXXXX", NULL);
   g_assert_nonnull (fx->root);
 
   /* mail_outbox computes <home>/Mail/<identity>/Outbox.mbox. We hijack

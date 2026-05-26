@@ -1,11 +1,11 @@
-dnl configure.ac - Autoconf configuration for Magpie.
+dnl configure.ac - Autoconf configuration for Spool.
 dnl Process this file with autoconf to produce a configure script.
 
 AC_PREREQ([2.69])
-AC_INIT([magpie],
+AC_INIT([spool],
         m4_esyscmd_s([cat version 2>/dev/null || echo "0.0.0-unknown"]),
         [thomasc1971@hotmail.com],
-        [magpie],
+        [spool],
         [https://gitlab.gnome.org/])
 AC_CONFIG_SRCDIR([src/main.c])
 AC_CONFIG_HEADERS([config.h])
@@ -16,11 +16,11 @@ AM_INIT_AUTOMAKE([foreign subdir-objects -Wall -Werror])
 
 dnl Recompute the version at configure time so a rebuild after new
 dnl commits picks up the current version without re-running autoreconf.
-MAGPIE_VERSION=`"$srcdir/build-aux/git-version.sh" "$srcdir" 2>/dev/null`
-AS_IF([test -z "$MAGPIE_VERSION"],
-      [MAGPIE_VERSION="$PACKAGE_VERSION"])
-AC_SUBST([MAGPIE_VERSION])
-AC_MSG_NOTICE([Magpie version: $MAGPIE_VERSION])
+SPOOL_VERSION=`"$srcdir/build-aux/git-version.sh" "$srcdir" 2>/dev/null`
+AS_IF([test -z "$SPOOL_VERSION"],
+      [SPOOL_VERSION="$PACKAGE_VERSION"])
+AC_SUBST([SPOOL_VERSION])
+AC_MSG_NOTICE([Spool version: $SPOOL_VERSION])
 
 dnl Programs
 AC_PROG_CC
@@ -66,12 +66,12 @@ AC_CHECK_LIB([etpan], [mailimap_new], [LIBETPAN_LIBS="-letpan"],
              [AC_MSG_ERROR([libetpan does not export mailimap_new (install libetpan-devel).])])
 AC_SUBST([LIBETPAN_LIBS])
 
-dnl MAGPIE_VERSION is intentionally NOT defined in config.h. src/Makefile.am
-dnl regenerates src/magpie-version.h on every `make` so the value tracks the
-dnl current git HEAD without re-running configure. The MAGPIE_VERSION shell
+dnl SPOOL_VERSION is intentionally NOT defined in config.h. src/Makefile.am
+dnl regenerates src/spool-version.h on every `make` so the value tracks the
+dnl current git HEAD without re-running configure. The SPOOL_VERSION shell
 dnl variable above is still AC_SUBST'd so the Makefile rule has a fallback
 dnl when build-aux/git-version.sh returns nothing (tarball builds, etc.).
-AC_DEFINE([MAGPIE_APP_ID], ["org.gnome.Magpie"], [Application id])
+AC_DEFINE([SPOOL_APP_ID], ["org.gnome.Spool"], [Application id])
 AC_DEFINE([GOA_API_IS_SUBJECT_TO_CHANGE], [1], [Acknowledge libgoa's unstable API])
 
 AC_CONFIG_FILES([
@@ -84,7 +84,7 @@ AC_CONFIG_FILES([
 AC_OUTPUT
 
 AC_MSG_NOTICE([])
-AC_MSG_NOTICE([  Magpie $MAGPIE_VERSION configured])
+AC_MSG_NOTICE([  Spool $SPOOL_VERSION configured])
 AC_MSG_NOTICE([    prefix:  $prefix])
 AC_MSG_NOTICE([    CFLAGS:  $CFLAGS])
 AC_MSG_NOTICE([    debug:   $enable_debug])

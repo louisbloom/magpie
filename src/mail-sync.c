@@ -375,7 +375,7 @@ on_messages_done (GObject *src,
   /* The Maildir-is-truth reconcile that used to run here moved to
    * MailMaildirWatcher: GFileMonitor on each folder's cur/ catches
    * external flag-renames as they happen, plus an initial reconcile
-   * arms each watcher so drift accumulated while magpie was closed is
+   * arms each watcher so drift accumulated while spool was closed is
    * resolved before sync even starts. By the time we get here sqlite
    * already mirrors disk for this folder. */
 

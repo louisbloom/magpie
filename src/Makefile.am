@@ -1,8 +1,8 @@
-# src/Makefile.am - Build the Magpie executable.
+# src/Makefile.am - Build the Spool executable.
 
-bin_PROGRAMS = magpie
+bin_PROGRAMS = spool
 
-magpie_SOURCES = \
+spool_SOURCES = \
     main.c \
     mail-arena.c \
     mail-arena.h \
@@ -56,29 +56,29 @@ magpie_SOURCES = \
     mail-backend-imap.h \
     mail-resources.c
 
-BUILT_SOURCES = magpie-version.h mail-resources.c
-CLEANFILES    = magpie-version.h mail-resources.c
+BUILT_SOURCES = spool-version.h mail-resources.c
+CLEANFILES    = spool-version.h mail-resources.c
 
-# Regenerate magpie-version.h on every `make` so the embedded version string
+# Regenerate spool-version.h on every `make` so the embedded version string
 # tracks the current git HEAD (and grows a -dirty suffix when the tree has
 # uncommitted changes). The recipe always runs, but the file is only
 # rewritten when the version actually changes — so dependent .o files stay
 # cached when nothing changed.
-.PHONY: magpie_version_force
-magpie-version.h: magpie_version_force
+.PHONY: spool_version_force
+spool-version.h: spool_version_force
 	@v=`"$(top_srcdir)/build-aux/git-version.sh" "$(top_srcdir)" 2>/dev/null`; \
-	test -n "$$v" || v="$(MAGPIE_VERSION)"; \
+	test -n "$$v" || v="$(SPOOL_VERSION)"; \
 	test -n "$$v" || v="unknown"; \
-	printf '#ifndef MAGPIE_VERSION_H\n#define MAGPIE_VERSION_H\n#define MAGPIE_VERSION "%s"\n#endif\n' "$$v" > $@.tmp; \
+	printf '#ifndef SPOOL_VERSION_H\n#define SPOOL_VERSION_H\n#define SPOOL_VERSION "%s"\n#endif\n' "$$v" > $@.tmp; \
 	if cmp -s $@.tmp $@ 2>/dev/null; then \
 	  rm -f $@.tmp; \
 	else \
 	  mv $@.tmp $@; \
 	  echo "  GEN      $@ ($$v)"; \
 	fi
-magpie_version_force:
+spool_version_force:
 
-GRESOURCE_XML  = $(top_srcdir)/data/org.gnome.Magpie.gresource.xml
+GRESOURCE_XML  = $(top_srcdir)/data/org.gnome.Spool.gresource.xml
 GRESOURCE_DEPS = \
     $(top_srcdir)/data/ui/window.ui \
     $(top_srcdir)/data/ui/compose-window.ui \
@@ -90,7 +90,7 @@ mail-resources.c: $(GRESOURCE_XML) $(GRESOURCE_DEPS)
 
 AM_CPPFLAGS = \
     -I$(top_srcdir)/src \
-    -DMAGPIE_DATADIR=\"$(datadir)\" \
+    -DSPOOL_DATADIR=\"$(datadir)\" \
     $(GTK_CFLAGS) \
     $(ADWAITA_CFLAGS) \
     $(GOA_CFLAGS) \
@@ -101,7 +101,7 @@ AM_CPPFLAGS = \
     $(WEBKIT_CFLAGS) \
     $(XML_CFLAGS)
 
-magpie_LDADD = \
+spool_LDADD = \
     $(GTK_LIBS) \
     $(ADWAITA_LIBS) \
     $(GOA_LIBS) \

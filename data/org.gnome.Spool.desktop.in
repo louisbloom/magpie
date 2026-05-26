@@ -1,12 +1,12 @@
 [Desktop Entry]
-Name=Magpie
+Name=Spool
 GenericName=Email Client
 Comment=Read and write email
-Exec=magpie
-Icon=org.gnome.Magpie
+Exec=spool
+Icon=org.gnome.Spool
 Terminal=false
 Type=Application
 StartupNotify=true
-StartupWMClass=org.gnome.Magpie
+StartupWMClass=org.gnome.Spool
 Categories=GNOME;GTK;Network;Email;
 Keywords=Mail;Email;Inbox;

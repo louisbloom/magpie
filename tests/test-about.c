@@ -17,7 +17,7 @@
 static char *
 load_application_c (void)
 {
-  g_autofree char *path = g_build_filename (MAGPIE_TOP_SRCDIR, "src", "mail-application.c", NULL);
+  g_autofree char *path = g_build_filename (SPOOL_TOP_SRCDIR, "src", "mail-application.c", NULL);
   char *contents = NULL;
   g_autoptr (GError) error = NULL;
   g_assert_true (g_file_get_contents (path, &contents, NULL, &error));
@@ -29,7 +29,7 @@ load_application_c (void)
 static char *
 load_mail_about_c (void)
 {
-  g_autofree char *path = g_build_filename (MAGPIE_TOP_SRCDIR, "src", "mail-about.c", NULL);
+  g_autofree char *path = g_build_filename (SPOOL_TOP_SRCDIR, "src", "mail-about.c", NULL);
   char *contents = NULL;
   g_autoptr (GError) error = NULL;
   g_assert_true (g_file_get_contents (path, &contents, NULL, &error));

@@ -448,7 +448,7 @@ test_link_raw_creates_hardlink (Fixture *f,
   g_assert_cmpint (sa.st_nlink, ==, 2);       /* link count bumped */
 }
 
-/* Regression: when an external client (mutt, another magpie instance)
+/* Regression: when an external client (mutt, another spool instance)
  * renames a file in cur/ to add or remove the S flag, the next sync
  * pass must pick that up and update sqlite to match — per the
  * Maildir-is-truth rule. The reconciler matches sqlite rows to disk
@@ -696,11 +696,11 @@ test_set_message_unread_renames_and_updates (Fixture *f,
 }
 
 static void
-test_application_id_is_magpie (Fixture *f,
-                               gconstpointer data)
+test_application_id_is_spool (Fixture *f,
+                              gconstpointer data)
 {
   /* The store stamps its sqlite header with the fourcc 'Mgpi'
-   * (0x4D677069) so a stray state.db is identifiable as Magpie's. */
+   * (0x4D677069) so a stray state.db is identifiable as Spool's. */
   g_autofree char *dbpath = g_build_filename (f->root, "state.db", NULL);
   sqlite3 *probe = NULL;
   g_assert_cmpint (sqlite3_open (dbpath, &probe), ==, SQLITE_OK);
@@ -1111,7 +1111,7 @@ main (int argc,
   ADD ("listener-remove-id-zero-is-noop", test_listener_remove_id_zero_is_noop);
   ADD ("set-unread-emits-flags-and-counts", test_set_unread_emits_flags_and_counts);
   ADD ("set-unread-noop-emits-nothing", test_set_unread_noop_emits_nothing);
-  ADD ("application-id-stamped", test_application_id_is_magpie);
+  ADD ("application-id-stamped", test_application_id_is_spool);
   ADD ("set-message-unread-renames", test_set_message_unread_renames_and_updates);
   ADD ("reconcile-folder-from-disk", test_reconcile_folder_from_disk);
 

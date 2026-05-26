@@ -1,4 +1,4 @@
-/* mail-application.c - AdwApplication subclass for Magpie. */
+/* mail-application.c - AdwApplication subclass for Spool. */
 
 #include "config.h"
 
@@ -57,8 +57,8 @@ MailApplication *
 mail_application_new (void)
 {
   return g_object_new (MAIL_TYPE_APPLICATION,
-                       "application-id", MAGPIE_APP_ID,
-                       "resource-base-path", "/org/gnome/Magpie",
+                       "application-id", SPOOL_APP_ID,
+                       "resource-base-path", "/org/gnome/Spool",
                        "flags", G_APPLICATION_DEFAULT_FLAGS,
                        NULL);
 }

@@ -24,10 +24,10 @@
 static char *
 load_window_ui (void)
 {
-  /* MAGPIE_TOP_SRCDIR is injected at compile time from automake's
+  /* SPOOL_TOP_SRCDIR is injected at compile time from automake's
    * $(top_srcdir), so the test works regardless of where it's invoked
    * from (make check, ./build/tests/test-window, gdb, etc.). */
-  g_autofree char *path = g_build_filename (MAGPIE_TOP_SRCDIR,
+  g_autofree char *path = g_build_filename (SPOOL_TOP_SRCDIR,
                                             "data", "ui", "window.ui", NULL);
   char *contents = NULL;
   g_autoptr (GError) error = NULL;

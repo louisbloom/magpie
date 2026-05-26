@@ -1,9 +1,9 @@
-# data/Makefile.am - Data files for Magpie.
+# data/Makefile.am - Data files for Spool.
 
 desktopdir   = $(datadir)/applications
-desktop_DATA = org.gnome.Magpie.desktop
+desktop_DATA = org.gnome.Spool.desktop
 
-org.gnome.Magpie.desktop: org.gnome.Magpie.desktop.in
+org.gnome.Spool.desktop: org.gnome.Spool.desktop.in
 	cp $< $@
 
 # Scalable app icon, installed under the hicolor theme so the
@@ -12,13 +12,13 @@ org.gnome.Magpie.desktop: org.gnome.Magpie.desktop.in
 # find a new scalable icon on next lookup, and update-icon-cache
 # only matters for the cached PNG sizes (which we don't ship).
 appiconsdir   = $(datadir)/icons/hicolor/scalable/apps
-appicons_DATA = icons/hicolor/scalable/apps/org.gnome.Magpie.svg
+appicons_DATA = icons/hicolor/scalable/apps/org.gnome.Spool.svg
 
 EXTRA_DIST = \
-    org.gnome.Magpie.desktop.in \
-    org.gnome.Magpie.gresource.xml \
-    icons/hicolor/scalable/apps/org.gnome.Magpie.svg \
+    org.gnome.Spool.desktop.in \
+    org.gnome.Spool.gresource.xml \
+    icons/hicolor/scalable/apps/org.gnome.Spool.svg \
     ui/window.ui \
     ui/style.css
 
-CLEANFILES = org.gnome.Magpie.desktop
+CLEANFILES = org.gnome.Spool.desktop

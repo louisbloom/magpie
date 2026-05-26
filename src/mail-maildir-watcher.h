@@ -11,7 +11,7 @@
  *
  * Initial reconcile: when a folder is added (mail_maildir_watcher_watch_folder)
  * the reconciler runs once *before* the monitor arms, so any drift
- * that accumulated while magpie was closed is picked up at startup.
+ * that accumulated while spool was closed is picked up at startup.
  *
  * Threading: every event and the debounce timer run on the GLib
  * default main context; the reconciler runs on the same context.
@@ -19,7 +19,7 @@
  *
  * Limits: each watched folder consumes one inotify watch descriptor.
  * Default /proc/sys/fs/inotify/max_user_watches is 8192; typical
- * magpie usage is a few hundred. NFS / SMB don't reliably deliver
+ * spool usage is a few hundred. NFS / SMB don't reliably deliver
  * inotify events — local-fs Maildir is assumed.
  */
 

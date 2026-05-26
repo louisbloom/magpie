@@ -1,4 +1,4 @@
-/* mail-application.h - AdwApplication subclass for Magpie. */
+/* mail-application.h - AdwApplication subclass for Spool. */
 
 #pragma once
 

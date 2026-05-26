@@ -1,9 +1,9 @@
-/* main.c - entry point for Magpie. */
+/* main.c - entry point for Spool. */
 
 #include "config.h"
 
-#include "magpie-version.h"
 #include "mail-application.h"
+#include "spool-version.h"
 
 #include <adwaita.h>
 #include <string.h>
@@ -130,7 +130,7 @@ main (int argc,
     {
       if (g_strcmp0 (argv[i], "--version") == 0)
         {
-          g_print ("magpie %s\n", MAGPIE_VERSION);
+          g_print ("spool %s\n", SPOOL_VERSION);
           return 0;
         }
     }

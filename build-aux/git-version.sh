@@ -1,5 +1,5 @@
 #!/bin/sh
-# git-version.sh - print the magpie version string.
+# git-version.sh - print the spool version string.
 #
 # Usage: git-version.sh [SRCDIR]
 #

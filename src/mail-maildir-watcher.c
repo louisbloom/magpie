@@ -130,7 +130,7 @@ mail_maildir_watcher_watch_folder (MailMaildirWatcher *self,
     return FALSE;
 
   /* Run the initial reconcile synchronously before arming the monitor.
-   * This picks up drift that accumulated while magpie was closed —
+   * This picks up drift that accumulated while spool was closed —
    * the user opens the app, the sidebar lists folders with stale
    * unread counts from sqlite, the watcher starts and immediately
    * fires FOLDER_COUNTS through the reconciler so the badges correct

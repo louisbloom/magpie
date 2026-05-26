@@ -204,7 +204,7 @@ test_initial_reconcile_on_watch (Fixture *f,
 {
   (void) data;
   /* Rename the file in cur/ to add :2,S before the watcher arms — this
-   * is the "magpie was closed while mutt marked messages read" case. */
+   * is the "spool was closed while mutt marked messages read" case. */
   g_autofree char *new_name = rename_add_s (f, f->msg_basename);
 
   Recorder rec;

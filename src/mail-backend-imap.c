@@ -25,11 +25,11 @@
 
 #include "config.h"
 
-#include "magpie-version.h"
 #include "mail-backend-imap.h"
 #include "mail-imap-id.h"
 #include "mail-imap-retry.h"
 #include "mail-mime.h"
+#include "spool-version.h"
 
 #include <gmime/gmime.h>
 #include <goa/goa.h>
@@ -237,7 +237,7 @@ ensure_connected_locked (MailBackendIMAP *self,
     {
       char *server_name = NULL;
       char *server_version = NULL;
-      mailimap_id_basic (self->imap, "Magpie", MAGPIE_VERSION,
+      mailimap_id_basic (self->imap, "Spool", SPOOL_VERSION,
                          &server_name, &server_version);
       free (server_name);
       free (server_version);
