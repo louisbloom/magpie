@@ -699,8 +699,8 @@ static void
 test_application_id_is_spool (Fixture *f,
                               gconstpointer data)
 {
-  /* The store stamps its sqlite header with the fourcc 'Mgpi'
-   * (0x4D677069) so a stray state.db is identifiable as Spool's. */
+  /* The store stamps its sqlite header with the fourcc 'Spol'
+   * (0x53706F6C) so a stray state.db is identifiable as Spool's. */
   g_autofree char *dbpath = g_build_filename (f->root, "state.db", NULL);
   sqlite3 *probe = NULL;
   g_assert_cmpint (sqlite3_open (dbpath, &probe), ==, SQLITE_OK);
@@ -708,7 +708,7 @@ test_application_id_is_spool (Fixture *f,
   g_assert_cmpint (sqlite3_prepare_v2 (probe, "PRAGMA application_id;", -1, &st, NULL),
                    ==, SQLITE_OK);
   g_assert_cmpint (sqlite3_step (st), ==, SQLITE_ROW);
-  g_assert_cmpint (sqlite3_column_int (st, 0), ==, 0x4D677069);
+  g_assert_cmpint (sqlite3_column_int (st, 0), ==, 0x53706F6C);
   sqlite3_finalize (st);
   sqlite3_close (probe);
 }

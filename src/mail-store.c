@@ -23,11 +23,9 @@
 #define MAIL_STORE_SCHEMA_VERSION 3
 
 /* Stamp the sqlite file header so `file(1)` and forensic tooling can
- * identify a stray state.db as Spool's. The fourcc is 'Mgpi'
- * (M=0x4D, g=0x67, p=0x70, i=0x69 -> 0x4D677069) — preserved from
- * the project's previous name so existing user databases keep
- * validating across the rename. */
-#define MAIL_STORE_APPLICATION_ID 0x4D677069
+ * identify a stray state.db as Spool's. Encoded as the fourcc 'Spol'
+ * (S=0x53, p=0x70, o=0x6F, l=0x6C -> 0x53706F6C). */
+#define MAIL_STORE_APPLICATION_ID 0x53706F6C
 
 struct _MailStore
 {
